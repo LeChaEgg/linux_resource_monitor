@@ -10,6 +10,7 @@ This tool is for long-run capacity sizing on Ubuntu servers:
 - capture the hottest threads and memory-heavy processes
 
 The implementation is in [resource_monitor.py](/path/to/system-resource-monitor/scripts/resource_monitor.py#L1) and the installer is [install-system-resource-monitor.sh](/path/to/system-resource-monitor/scripts/install-system-resource-monitor.sh#L1).
+The uninstaller is [uninstall-system-resource-monitor.sh](/path/to/system-resource-monitor/scripts/uninstall-system-resource-monitor.sh#L1).
 The sizing summary helper is [summarize_resource_monitor.py](/path/to/system-resource-monitor/scripts/summarize_resource_monitor.py#L1).
 
 ## Why this design
@@ -56,6 +57,20 @@ That will:
 3. create `/etc/default/system-resource-monitor`
 4. create and enable `system-resource-monitor.service`
 5. start logging immediately and on every future boot
+
+## Uninstall or roll back
+
+Remove the service and installed binaries but keep config and logs:
+
+```bash
+sudo sh /path/to/system-resource-monitor/scripts/uninstall-system-resource-monitor.sh
+```
+
+Fully remove the installed state, including `/etc/default/system-resource-monitor` and `/var/log/system-resource-monitor`:
+
+```bash
+sudo sh /path/to/system-resource-monitor/scripts/uninstall-system-resource-monitor.sh --purge
+```
 
 ## Default config
 
