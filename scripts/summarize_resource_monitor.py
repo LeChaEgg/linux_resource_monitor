@@ -34,6 +34,12 @@ def format_gib(value: Optional[float]) -> str:
     return f"{value / (1024 ** 3):.2f} GiB"
 
 
+def format_mib_per_sec(value: Optional[float]) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value / (1024 ** 2):.2f} MiB/s"
+
+
 def parse_sample(line: str) -> Optional[Dict[str, object]]:
     line = line.strip()
     if not line:
@@ -76,6 +82,10 @@ def build_report(log_files: Iterable[Path]) -> str:
     cpu_used: List[float] = []
     mem_used: List[float] = []
     swap_used: List[float] = []
+    disk_read_bps: List[float] = []
+    disk_write_bps: List[float] = []
+    network_rx_bps: List[float] = []
+    network_tx_bps: List[float] = []
     gpu_util_by_device: Dict[str, List[float]] = defaultdict(list)
     gpu_mem_by_device: Dict[str, List[float]] = defaultdict(list)
     top_thread_observations: List[Dict[str, object]] = []
@@ -106,6 +116,20 @@ def build_report(log_files: Iterable[Path]) -> str:
                         mem_used.append(float(memory["mem_used_pct"]))
                     if memory.get("swap_used_pct") is not None:
                         swap_used.append(float(memory["swap_used_pct"]))
+
+                disk = sample.get("disk", {})
+                if isinstance(disk, dict):
+                    if disk.get("read_bytes_per_sec") is not None:
+                        disk_read_bps.append(float(disk["read_bytes_per_sec"]))
+                    if disk.get("write_bytes_per_sec") is not None:
+                        disk_write_bps.append(float(disk["write_bytes_per_sec"]))
+
+                network = sample.get("network", {})
+                if isinstance(network, dict):
+                    if network.get("rx_bytes_per_sec") is not None:
+                        network_rx_bps.append(float(network["rx_bytes_per_sec"]))
+                    if network.get("tx_bytes_per_sec") is not None:
+                        network_tx_bps.append(float(network["tx_bytes_per_sec"]))
 
                 gpu = sample.get("gpu", {})
                 if isinstance(gpu, dict):
@@ -181,6 +205,22 @@ def build_report(log_files: Iterable[Path]) -> str:
     lines.append(f"  p99: {format_pct(mem_p99)}")
     lines.append(f"  max: {format_pct(max(mem_used) if mem_used else None)}")
     lines.append(f"  swap max: {format_pct(swap_max)}")
+
+    if disk_read_bps or disk_write_bps:
+        lines.append("")
+        lines.append("Disk Throughput")
+        lines.append(f"  read p95: {format_mib_per_sec(percentile(disk_read_bps, 95))}")
+        lines.append(f"  read max: {format_mib_per_sec(max(disk_read_bps) if disk_read_bps else None)}")
+        lines.append(f"  write p95: {format_mib_per_sec(percentile(disk_write_bps, 95))}")
+        lines.append(f"  write max: {format_mib_per_sec(max(disk_write_bps) if disk_write_bps else None)}")
+
+    if network_rx_bps or network_tx_bps:
+        lines.append("")
+        lines.append("Network Throughput")
+        lines.append(f"  rx p95: {format_mib_per_sec(percentile(network_rx_bps, 95))}")
+        lines.append(f"  rx max: {format_mib_per_sec(max(network_rx_bps) if network_rx_bps else None)}")
+        lines.append(f"  tx p95: {format_mib_per_sec(percentile(network_tx_bps, 95))}")
+        lines.append(f"  tx max: {format_mib_per_sec(max(network_tx_bps) if network_tx_bps else None)}")
 
     if gpu_util_by_device:
         lines.append("")

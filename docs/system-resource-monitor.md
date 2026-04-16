@@ -4,7 +4,7 @@
 
 This tool is for long-run capacity sizing on Ubuntu servers:
 
-- record CPU, memory, and GPU usage every 10 seconds
+- record CPU, memory, disk, network, and GPU usage every 10 seconds
 - start automatically at boot
 - keep daily log files for later analysis
 - capture the hottest threads and memory-heavy processes
@@ -30,6 +30,8 @@ It does **not** depend on `psutil`, Prometheus, Docker, or a database.
 - 1m / 5m / 15m load average
 - memory used / available
 - swap used
+- aggregate disk read / write throughput across monitored block devices
+- aggregate network receive / transmit throughput across non-loopback interfaces
 - top `N` CPU-consuming threads
 - top `N` memory-consuming processes
 - NVIDIA GPU utilization and memory usage
@@ -133,6 +135,14 @@ Each line is one JSON object:
     "mem_total_bytes": 270582939648,
     "mem_used_bytes": 182314950656,
     "mem_used_pct": 67.38
+  },
+  "disk": {
+    "read_bytes_per_sec": 1048576.0,
+    "write_bytes_per_sec": 524288.0
+  },
+  "network": {
+    "rx_bytes_per_sec": 262144.0,
+    "tx_bytes_per_sec": 131072.0
   },
   "top_cpu_threads": [
     {

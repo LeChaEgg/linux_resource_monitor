@@ -4,7 +4,7 @@ Lightweight Ubuntu resource monitoring for long-run server sizing.
 
 ## Contents
 
-- `scripts/resource_monitor.py`: CPU, memory, swap, GPU, and top hot-thread sampler
+- `scripts/resource_monitor.py`: CPU, memory, swap, disk, network, GPU, and top hot-thread sampler
 - `scripts/install-system-resource-monitor.sh`: systemd installer for Ubuntu
 - `scripts/uninstall-system-resource-monitor.sh`: systemd uninstaller with optional purge
 - `scripts/summarize_resource_monitor.py`: percentile-based log summarizer
@@ -40,4 +40,4 @@ sudo sh scripts/uninstall-system-resource-monitor.sh --purge
 
 - Designed for Ubuntu/Linux with `systemd`
 - Uses `/proc` and `nvidia-smi`; no Python third-party dependencies
-- Tracks top CPU threads and top memory processes
+- Tracks top CPU threads, top memory processes, plus aggregate disk and network throughput

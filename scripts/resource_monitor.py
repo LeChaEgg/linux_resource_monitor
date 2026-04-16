@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Tuple
 PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
 CLK_TCK = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
 CPU_COUNT = os.cpu_count() or 1
+DISKSTAT_SECTOR_BYTES = 512
 TERMINATE = False
 
 
@@ -48,6 +49,8 @@ class Snapshot:
     cpu_total: int
     cpu_idle: int
     memory: Dict[str, float]
+    disk: Dict[str, int]
+    network: Dict[str, int]
     loadavg: Tuple[float, float, float]
     uptime_seconds: float
     process_count: int
@@ -146,6 +149,65 @@ def read_memory() -> Dict[str, float]:
     }
 
 
+def is_monitored_block_device(name: str) -> bool:
+    return name.startswith(("sd", "hd", "vd", "xvd", "nvme", "mmcblk"))
+
+
+def read_disk_counters() -> Dict[str, int]:
+    read_bytes = 0
+    write_bytes = 0
+    device_count = 0
+
+    for entry in Path("/sys/block").iterdir():
+        if not is_monitored_block_device(entry.name):
+            continue
+        try:
+            fields = read_text(entry / "stat").split()
+        except OSError:
+            continue
+        if len(fields) < 7:
+            continue
+
+        read_bytes += int(fields[2]) * DISKSTAT_SECTOR_BYTES
+        write_bytes += int(fields[6]) * DISKSTAT_SECTOR_BYTES
+        device_count += 1
+
+    return {
+        "device_count": device_count,
+        "read_bytes": read_bytes,
+        "write_bytes": write_bytes,
+    }
+
+
+def read_network_counters() -> Dict[str, int]:
+    rx_bytes = 0
+    tx_bytes = 0
+    interface_count = 0
+
+    with Path("/proc/net/dev").open() as handle:
+        for line in handle.readlines()[2:]:
+            if ":" not in line:
+                continue
+            name, raw_fields = line.split(":", 1)
+            interface = name.strip()
+            if interface == "lo":
+                continue
+
+            fields = raw_fields.split()
+            if len(fields) < 16:
+                continue
+
+            rx_bytes += int(fields[0])
+            tx_bytes += int(fields[8])
+            interface_count += 1
+
+    return {
+        "interface_count": interface_count,
+        "rx_bytes": rx_bytes,
+        "tx_bytes": tx_bytes,
+    }
+
+
 def read_uptime_seconds() -> float:
     raw = read_text(Path("/proc/uptime")).split()
     return float(raw[0])
@@ -174,6 +236,8 @@ def collect_snapshot(top_n: int) -> Snapshot:
     cpu_total, cpu_idle = read_cpu_totals()
     loadavg = os.getloadavg()
     memory = read_memory()
+    disk = read_disk_counters()
+    network = read_network_counters()
     uptime_seconds = read_uptime_seconds()
 
     processes: List[ProcessEntry] = []
@@ -238,6 +302,8 @@ def collect_snapshot(top_n: int) -> Snapshot:
         cpu_total=cpu_total,
         cpu_idle=cpu_idle,
         memory=memory,
+        disk=disk,
+        network=network,
         loadavg=loadavg,
         uptime_seconds=uptime_seconds,
         process_count=len(processes),
@@ -437,12 +503,16 @@ def build_sample(
     busy_delta = max(total_delta - idle_delta, 0)
     interval_seconds = max(current.collected_at_monotonic - previous.collected_at_monotonic, 0.0)
     cpu_used_pct = round((busy_delta / total_delta) * 100, 2) if total_delta > 0 else None
+    disk_read_delta = max(current.disk["read_bytes"] - previous.disk["read_bytes"], 0)
+    disk_write_delta = max(current.disk["write_bytes"] - previous.disk["write_bytes"], 0)
+    network_rx_delta = max(current.network["rx_bytes"] - previous.network["rx_bytes"], 0)
+    network_tx_delta = max(current.network["tx_bytes"] - previous.network["tx_bytes"], 0)
 
     now = datetime.now(timezone.utc)
     top_cpu_threads = build_top_cpu_threads(previous, current, interval_seconds, top_n)
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "timestamp": now.isoformat().replace("+00:00", "Z"),
         "hostname": host,
         "boot_id": boot_id,
@@ -455,6 +525,20 @@ def build_sample(
             "loadavg_15m": round(current.loadavg[2], 3),
         },
         "memory": current.memory,
+        "disk": {
+            "device_count": current.disk["device_count"],
+            "read_bytes": current.disk["read_bytes"],
+            "write_bytes": current.disk["write_bytes"],
+            "read_bytes_per_sec": round(disk_read_delta / interval_seconds, 2) if interval_seconds > 0 else None,
+            "write_bytes_per_sec": round(disk_write_delta / interval_seconds, 2) if interval_seconds > 0 else None,
+        },
+        "network": {
+            "interface_count": current.network["interface_count"],
+            "rx_bytes": current.network["rx_bytes"],
+            "tx_bytes": current.network["tx_bytes"],
+            "rx_bytes_per_sec": round(network_rx_delta / interval_seconds, 2) if interval_seconds > 0 else None,
+            "tx_bytes_per_sec": round(network_tx_delta / interval_seconds, 2) if interval_seconds > 0 else None,
+        },
         "uptime_seconds": round(current.uptime_seconds, 3),
         "scan": {
             "process_count": current.process_count,
