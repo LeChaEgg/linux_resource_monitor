@@ -77,6 +77,14 @@ RETAIN_DAYS=30
 LOG_DIR=/var/log/system-resource-monitor
 ```
 
+For local debugging, this repo also reserves an ignored directory:
+
+```bash
+local-debug-logs/
+```
+
+You can copy `metrics-*.jsonl` files from a server into that directory and run the analysis scripts below with `--source downloaded`.
+
 ## Log Shape
 
 Each line in `metrics-YYYY-MM-DD.jsonl` looks like:
@@ -186,6 +194,26 @@ Summarize the last 7 days:
 ```bash
 system-resource-monitor-summary --log-dir /var/log/system-resource-monitor --days 7
 ```
+
+Find the highest memory, swap, CPU, and process-RSS samples in downloaded logs:
+
+```bash
+python3 scripts/find_peak_samples.py --source downloaded --days 7
+```
+
+Inspect a 30-minute window around an incident timestamp:
+
+```bash
+python3 scripts/inspect_log_window.py --source downloaded --timestamp 2026-04-20T01:45:24Z --minutes-before 15 --minutes-after 15
+```
+
+Export samples to CSV for plotting:
+
+```bash
+python3 scripts/export_metrics_csv.py --source downloaded --days 7 --output /tmp/resource-monitor.csv
+```
+
+All of these scripts also accept `--log-dir` if you want to point at a custom directory directly.
 
 Take one manual sample into a temp directory:
 

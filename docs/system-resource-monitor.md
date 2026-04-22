@@ -92,6 +92,20 @@ sudoedit /etc/default/system-resource-monitor
 sudo systemctl restart system-resource-monitor.service
 ```
 
+## Local log analysis workflow
+
+When you need to investigate an incident away from the server, copy the relevant `metrics-YYYY-MM-DD.jsonl` files into the repo-local `local-debug-logs/` directory. That directory is ignored by git, so downloaded logs stay local.
+
+You can then run the analysis helpers against either the default server log directory or the downloaded local copy:
+
+```bash
+python3 scripts/find_peak_samples.py --source downloaded --days 7
+python3 scripts/inspect_log_window.py --source downloaded --timestamp 2026-04-20T01:45:24Z --minutes-before 15 --minutes-after 15
+python3 scripts/export_metrics_csv.py --source downloaded --days 7 --output /tmp/resource-monitor.csv
+```
+
+If you want to point at a custom directory instead, use `--log-dir /path/to/logs`. `--log-dir` overrides `--source`.
+
 ## Validate after install
 
 Check the service:
