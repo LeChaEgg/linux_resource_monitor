@@ -32,6 +32,8 @@ After the service has collected data, summarize it with:
 system-resource-monitor-summary --log-dir /var/log/system-resource-monitor --days 7
 ```
 
+`--days 7` means the most recent 7 log days that actually have records, not necessarily the last 7 calendar dates.
+
 ## What It Monitors
 
 Each sample records:

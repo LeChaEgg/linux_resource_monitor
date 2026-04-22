@@ -118,6 +118,8 @@ Summarize the last 7 days for sizing:
 system-resource-monitor-summary --log-dir /var/log/system-resource-monitor --days 7
 ```
 
+`--days 7` selects the most recent 7 log days that actually exist under the log directory, so gaps on days when the system was off are ignored.
+
 ## Sample log shape
 
 Each line is one JSON object:
