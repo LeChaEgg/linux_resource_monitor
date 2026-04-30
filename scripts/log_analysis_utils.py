@@ -2,16 +2,26 @@
 
 import argparse
 import json
+import re
 import sys
 from datetime import date, datetime
 from json import JSONDecodeError
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SERVER_LOG_DIR = Path("/var/log/system-resource-monitor")
 DEFAULT_DOWNLOADED_LOG_DIR = REPO_ROOT / "local-debug-logs"
+COMBINED_LOG_RE = re.compile(
+    r"^(?P<hostname>.+)_(?P<start>\d{4}-\d{2}-\d{2})_to_(?P<end>\d{4}-\d{2}-\d{2})\.jsonl$"
+)
+
+
+class LogFiles(list):
+    def __init__(self, paths: Iterable[Path], selected_dates_by_path: Dict[Path, Optional[Set[date]]]) -> None:
+        super().__init__(paths)
+        self.selected_dates_by_path = selected_dates_by_path
 
 
 def add_log_source_args(parser: argparse.ArgumentParser, *, default_days: int = 7) -> None:
@@ -50,18 +60,85 @@ def parse_log_file_date(path: Path) -> Optional[date]:
         return None
 
 
+def parse_combined_log_file_date_range(path: Path) -> Optional[Tuple[date, date]]:
+    match = COMBINED_LOG_RE.match(path.name)
+    if match is None:
+        return None
+    try:
+        start = datetime.strptime(match.group("start"), "%Y-%m-%d").date()
+        end = datetime.strptime(match.group("end"), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    if end < start:
+        return None
+    return start, end
+
+
+def parse_sample_timestamp_date(sample: Dict[str, object]) -> Optional[date]:
+    timestamp = sample.get("timestamp")
+    if not isinstance(timestamp, str):
+        return None
+    try:
+        return datetime.fromisoformat(timestamp.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def parse_sample_date_from_line(line: str) -> Optional[date]:
+    try:
+        sample = json.loads(line)
+    except JSONDecodeError:
+        return None
+    if not isinstance(sample, dict):
+        return None
+    return parse_sample_timestamp_date(sample)
+
+
+def collect_sample_dates(path: Path) -> Set[date]:
+    dates: Set[date] = set()
+    with path.open(encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            sample_date = parse_sample_date_from_line(line)
+            if sample_date is not None:
+                dates.add(sample_date)
+    return dates
+
+
 def list_log_files(log_dir: Path, days: Optional[int]) -> List[Path]:
-    dated_files: List[Tuple[date, Path]] = []
+    dates_by_path: Dict[Path, Set[date]] = {}
     for path in log_dir.glob("metrics-*.jsonl"):
         file_date = parse_log_file_date(path)
         if file_date is None:
             continue
-        dated_files.append((file_date, path))
+        dates_by_path[path] = {file_date}
 
-    dated_files.sort()
-    if days is None:
-        return [path for _, path in dated_files]
-    return [path for _, path in dated_files[-days:]]
+    for path in log_dir.glob("*.jsonl"):
+        if path in dates_by_path or parse_combined_log_file_date_range(path) is None:
+            continue
+        sample_dates = collect_sample_dates(path)
+        if sample_dates:
+            dates_by_path[path] = sample_dates
+
+    recorded_dates = sorted({sample_date for dates in dates_by_path.values() for sample_date in dates})
+    if days is None or days == 0:
+        selected_dates = set(recorded_dates)
+    else:
+        selected_dates = set(recorded_dates[-days:])
+
+    selected_items: List[Tuple[date, str, Path, Optional[Set[date]]]] = []
+    for path, file_dates in dates_by_path.items():
+        selected_for_path = file_dates & selected_dates
+        if not selected_for_path:
+            continue
+        date_filter = None if selected_for_path == file_dates else selected_for_path
+        selected_items.append((min(selected_for_path), path.name, path, date_filter))
+
+    selected_items.sort()
+    selected_dates_by_path = {path: date_filter for _, _, path, date_filter in selected_items}
+    return LogFiles([path for _, _, path, _ in selected_items], selected_dates_by_path)
 
 
 def resolve_log_files(args: argparse.Namespace) -> Tuple[Path, List[Path]]:
@@ -82,7 +159,9 @@ def warn_invalid_sample(path: Path, line_number: int, exc: JSONDecodeError) -> N
 
 
 def iter_samples(log_files: Iterable[Path]) -> Iterator[Tuple[Path, int, Dict[str, object]]]:
+    selected_dates_by_path = getattr(log_files, "selected_dates_by_path", {})
     for path in log_files:
+        selected_dates = selected_dates_by_path.get(path)
         with path.open(encoding="utf-8") as handle:
             for line_number, raw_line in enumerate(handle, start=1):
                 line = raw_line.strip()
@@ -94,6 +173,8 @@ def iter_samples(log_files: Iterable[Path]) -> Iterator[Tuple[Path, int, Dict[st
                     warn_invalid_sample(path, line_number, exc)
                     continue
                 if not isinstance(sample, dict):
+                    continue
+                if selected_dates is not None and parse_sample_timestamp_date(sample) not in selected_dates:
                     continue
                 yield path, line_number, sample
 

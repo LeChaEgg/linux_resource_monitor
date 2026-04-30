@@ -42,6 +42,50 @@ class LogAnalysisUtilsTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0][2]["timestamp"], "2026-04-20T00:00:00Z")
 
+    def test_resolve_log_files_reads_combined_downloaded_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir)
+            combined = log_dir / "server-a_2026-04-10_to_2026-04-12.jsonl"
+            combined.write_text(
+                "\n".join(
+                    [
+                        '{"timestamp":"2026-04-10T00:00:00Z","hostname":"server-a"}',
+                        '{"timestamp":"2026-04-12T00:00:00Z","hostname":"server-a"}',
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            args = argparse.Namespace(source="downloaded", log_dir=str(log_dir), days=0)
+            _, files = MODULE.resolve_log_files(args)
+            rows = list(MODULE.iter_samples(files))
+
+        self.assertEqual([path.name for path in files], ["server-a_2026-04-10_to_2026-04-12.jsonl"])
+        self.assertEqual([row[2]["timestamp"] for row in rows], ["2026-04-10T00:00:00Z", "2026-04-12T00:00:00Z"])
+
+    def test_recent_days_filter_applies_inside_combined_downloaded_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir)
+            combined = log_dir / "server-a_2026-04-10_to_2026-04-12.jsonl"
+            combined.write_text(
+                "\n".join(
+                    [
+                        '{"timestamp":"2026-04-10T00:00:00Z","hostname":"server-a"}',
+                        '{"timestamp":"2026-04-12T00:00:00Z","hostname":"server-a"}',
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            args = argparse.Namespace(source="downloaded", log_dir=str(log_dir), days=1)
+            _, files = MODULE.resolve_log_files(args)
+            rows = list(MODULE.iter_samples(files))
+
+        self.assertEqual([path.name for path in files], ["server-a_2026-04-10_to_2026-04-12.jsonl"])
+        self.assertEqual([row[2]["timestamp"] for row in rows], ["2026-04-12T00:00:00Z"])
+
 
 if __name__ == "__main__":
     unittest.main()

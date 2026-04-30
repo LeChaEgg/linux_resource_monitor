@@ -12,6 +12,7 @@ This tool is for long-run capacity sizing on Ubuntu servers:
 The implementation is in [resource_monitor.py](/path/to/system-resource-monitor/scripts/resource_monitor.py#L1) and the installer is [install-system-resource-monitor.sh](/path/to/system-resource-monitor/scripts/install-system-resource-monitor.sh#L1).
 The uninstaller is [uninstall-system-resource-monitor.sh](/path/to/system-resource-monitor/scripts/uninstall-system-resource-monitor.sh#L1).
 The sizing summary helper is [summarize_resource_monitor.py](/path/to/system-resource-monitor/scripts/summarize_resource_monitor.py#L1).
+The SSH log downloader is [download_server_logs.py](/path/to/system-resource-monitor/scripts/download_server_logs.py#L1).
 
 ## Why this design
 
@@ -94,7 +95,19 @@ sudo systemctl restart system-resource-monitor.service
 
 ## Local log analysis workflow
 
-When you need to investigate an incident away from the server, copy the relevant `metrics-YYYY-MM-DD.jsonl` files into the repo-local `local-debug-logs/` directory. That directory is ignored by git, so downloaded logs stay local.
+When you need to investigate an incident away from the server, download the remote logs into the repo-local `local-debug-logs/` directory. That directory is ignored by git, so downloaded logs stay local.
+
+```bash
+python3 scripts/download_server_logs.py robotruck@100.64.0.6
+```
+
+The downloader reads all remote `metrics-YYYY-MM-DD.jsonl` files from `/var/log/system-resource-monitor`, detects the server hostname, and writes a combined local file named like:
+
+```text
+local-debug-logs/server-a_2026-04-20_to_2026-04-30.jsonl
+```
+
+If that hostname already has a local combined file, the new download is merged into it, exact duplicate rows are skipped, and the file is renamed when the date range expands. Use `--remote-log-dir` for a non-default remote log path, and `--port`, `--identity-file`, or repeated `--ssh-option` values for SSH connection details.
 
 You can then run the analysis helpers against either the default server log directory or the downloaded local copy:
 

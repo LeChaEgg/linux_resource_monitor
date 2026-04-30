@@ -8,6 +8,7 @@ Lightweight Ubuntu resource monitoring for long-run server sizing.
 - `scripts/install-system-resource-monitor.sh`: systemd installer for Ubuntu
 - `scripts/uninstall-system-resource-monitor.sh`: systemd uninstaller with optional purge
 - `scripts/summarize_resource_monitor.py`: percentile-based log summarizer
+- `scripts/download_server_logs.py`: SSH downloader for server logs into `local-debug-logs/`
 - `docs/system-resource-monitor.md`: install and operating notes
 
 ## Quick Start
@@ -18,6 +19,72 @@ cd system-resource-monitor
 sudo sh scripts/install-system-resource-monitor.sh
 ```
 
+## Useful Commands
+
+Check service state:
+
+```bash
+systemctl status system-resource-monitor.service --no-pager
+```
+
+Tail today's raw samples:
+
+```bash
+tail -n 5 /var/log/system-resource-monitor/metrics-$(date +%F).jsonl
+```
+
+Summarize the last 7 days on a server:
+
+```bash
+system-resource-monitor-summary --log-dir /var/log/system-resource-monitor --days 7
+```
+
+Download all logs from a server for local analysis:
+
+```bash
+python3 scripts/download_server_logs.py robotruck@100.64.0.6
+```
+
+Find the highest memory, swap, CPU, and process-RSS samples in downloaded logs:
+
+```bash
+python3 scripts/find_peak_samples.py --source downloaded --days 7
+```
+
+Inspect a 30-minute window around an incident timestamp:
+
+```bash
+python3 scripts/inspect_log_window.py --source downloaded --timestamp 2026-04-20T01:45:24Z --minutes-before 15 --minutes-after 15
+```
+
+Export samples to CSV for plotting:
+
+```bash
+python3 scripts/export_metrics_csv.py --source downloaded --days 7 --output /tmp/resource-monitor.csv
+```
+
+Take one manual sample into a temp directory:
+
+```bash
+sudo /usr/local/bin/system-resource-monitor --once --interval 1 --top-n 5 --log-dir /tmp/system-resource-monitor
+```
+
+Remove the service and binaries while keeping logs and config:
+
+```bash
+sudo sh scripts/uninstall-system-resource-monitor.sh
+```
+
+Fully roll back and delete logs and config too:
+
+```bash
+sudo sh scripts/uninstall-system-resource-monitor.sh --purge
+```
+
+All analysis scripts accept `--log-dir` if you want to point at a custom directory directly. `--days 7` means the most recent 7 log days that actually have records, not necessarily the last 7 calendar dates.
+
+## Install Details
+
 The installer will:
 
 - install `system-resource-monitor` to `/usr/local/bin/system-resource-monitor`
@@ -26,13 +93,30 @@ The installer will:
 - create and enable `system-resource-monitor.service`
 - start the service immediately and again on future boots
 
-After the service has collected data, summarize it with:
+Default config written at install time:
 
 ```bash
-system-resource-monitor-summary --log-dir /var/log/system-resource-monitor --days 7
+INTERVAL_SECONDS=10
+TOP_N=5
+RETAIN_DAYS=30
+LOG_DIR=/var/log/system-resource-monitor
 ```
 
-`--days 7` means the most recent 7 log days that actually have records, not necessarily the last 7 calendar dates.
+## Local Debug Logs
+
+For local debugging, this repo reserves an ignored directory:
+
+```bash
+local-debug-logs/
+```
+
+The downloader reads the remote `/var/log/system-resource-monitor/metrics-*.jsonl` files, detects the remote hostname, and writes one local file named like:
+
+```text
+local-debug-logs/server-a_2026-04-20_to_2026-04-30.jsonl
+```
+
+If a file for that hostname already exists, new rows are merged into the existing local file and duplicate rows are skipped. The file is renamed when the start or end date changes.
 
 ## What It Monitors
 
@@ -67,23 +151,6 @@ File layout:
 - filename format: `metrics-YYYY-MM-DD.jsonl`
 - one JSON object per line
 - old daily log files are pruned according to `RETAIN_DAYS`
-
-Default config written at install time:
-
-```bash
-INTERVAL_SECONDS=10
-TOP_N=5
-RETAIN_DAYS=30
-LOG_DIR=/var/log/system-resource-monitor
-```
-
-For local debugging, this repo also reserves an ignored directory:
-
-```bash
-local-debug-logs/
-```
-
-You can copy `metrics-*.jsonl` files from a server into that directory and run the analysis scripts below with `--source downloaded`.
 
 ## Log Shape
 
@@ -173,64 +240,6 @@ Each line in `metrics-YYYY-MM-DD.jsonl` looks like:
     ]
   }
 }
-```
-
-## Useful Commands
-
-Check service state:
-
-```bash
-systemctl status system-resource-monitor.service --no-pager
-```
-
-Tail today's raw samples:
-
-```bash
-tail -n 5 /var/log/system-resource-monitor/metrics-$(date +%F).jsonl
-```
-
-Summarize the last 7 days:
-
-```bash
-system-resource-monitor-summary --log-dir /var/log/system-resource-monitor --days 7
-```
-
-Find the highest memory, swap, CPU, and process-RSS samples in downloaded logs:
-
-```bash
-python3 scripts/find_peak_samples.py --source downloaded --days 7
-```
-
-Inspect a 30-minute window around an incident timestamp:
-
-```bash
-python3 scripts/inspect_log_window.py --source downloaded --timestamp 2026-04-20T01:45:24Z --minutes-before 15 --minutes-after 15
-```
-
-Export samples to CSV for plotting:
-
-```bash
-python3 scripts/export_metrics_csv.py --source downloaded --days 7 --output /tmp/resource-monitor.csv
-```
-
-All of these scripts also accept `--log-dir` if you want to point at a custom directory directly.
-
-Take one manual sample into a temp directory:
-
-```bash
-sudo /usr/local/bin/system-resource-monitor --once --interval 1 --top-n 5 --log-dir /tmp/system-resource-monitor
-```
-
-To remove the service and binaries while keeping logs and config:
-
-```bash
-sudo sh scripts/uninstall-system-resource-monitor.sh
-```
-
-To fully roll back and delete logs and config too:
-
-```bash
-sudo sh scripts/uninstall-system-resource-monitor.sh --purge
 ```
 
 ## Notes
