@@ -8,6 +8,7 @@ Lightweight Ubuntu resource monitoring for long-run server sizing.
 - `scripts/install-system-resource-monitor.sh`: systemd installer for Ubuntu
 - `scripts/uninstall-system-resource-monitor.sh`: systemd uninstaller with optional purge
 - `scripts/summarize_resource_monitor.py`: percentile-based log summarizer
+- `scripts/log_analysis_utils.py`: shared log selection and parsing helper
 - `scripts/download_server_logs.py`: SSH downloader for server logs into `local-debug-logs/`
 - `docs/system-resource-monitor.md`: install and operating notes
 
@@ -33,10 +34,10 @@ Tail today's raw samples:
 tail -n 5 /var/log/system-resource-monitor/metrics-$(date +%F).jsonl
 ```
 
-Summarize the last 7 days on a server:
+Summarize the most recent 30 recorded days:
 
 ```bash
-system-resource-monitor-summary --log-dir /var/log/system-resource-monitor --days 7
+system-resource-monitor-summary
 ```
 
 Download all logs from a server for local analysis:
@@ -45,22 +46,28 @@ Download all logs from a server for local analysis:
 python3 scripts/download_server_logs.py robotruck@100.64.0.6
 ```
 
-Find the highest memory, swap, CPU, and process-RSS samples in downloaded logs:
+Find the highest memory, swap, CPU, and process-RSS samples:
 
 ```bash
-python3 scripts/find_peak_samples.py --source downloaded --days 7
+python3 scripts/find_peak_samples.py
+```
+
+Find the highest samples in downloaded local logs for one host and date range:
+
+```bash
+python3 scripts/find_peak_samples.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30
 ```
 
 Inspect a 30-minute window around an incident timestamp:
 
 ```bash
-python3 scripts/inspect_log_window.py --source downloaded --timestamp 2026-04-20T01:45:24Z --minutes-before 15 --minutes-after 15
+python3 scripts/inspect_log_window.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-20 --timestamp 2026-04-20T01:45:24Z --minutes-before 15 --minutes-after 15
 ```
 
 Export samples to CSV for plotting:
 
 ```bash
-python3 scripts/export_metrics_csv.py --source downloaded --days 7 --output /tmp/resource-monitor.csv
+python3 scripts/export_metrics_csv.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30 --output /tmp/resource-monitor.csv
 ```
 
 Take one manual sample into a temp directory:
@@ -81,7 +88,15 @@ Fully roll back and delete logs and config too:
 sudo sh scripts/uninstall-system-resource-monitor.sh --purge
 ```
 
-All analysis scripts accept `--log-dir` if you want to point at a custom directory directly. `--days 7` means the most recent 7 log days that actually have records, not necessarily the last 7 calendar dates.
+Analysis scripts default to `--mode auto` and the most recent 30 recorded days. Auto mode uses server logs from `/var/log/system-resource-monitor` when present; otherwise it uses the newest combined file in `local-debug-logs/`.
+
+Analysis scripts support three modes:
+
+- `--mode auto` chooses server logs first, then downloaded local logs
+- `--mode server` reads `/var/log/system-resource-monitor` and uses `--days`
+- `--mode local` reads combined downloader files in `local-debug-logs/`
+
+All analysis scripts accept `--log-dir` if you want to point at a custom directory directly. `--days 30` means the most recent 30 log days that actually have records, not necessarily the last 30 calendar dates. In local mode, `--hostname`, `--start-date`, and `--end-date` are optional filters; when omitted, the newest combined local log file is used.
 
 ## Install Details
 
@@ -89,6 +104,7 @@ The installer will:
 
 - install `system-resource-monitor` to `/usr/local/bin/system-resource-monitor`
 - install `system-resource-monitor-summary` to `/usr/local/bin/system-resource-monitor-summary`
+- install `log_analysis_utils.py` to `/usr/local/bin/log_analysis_utils.py` for the summary helper
 - create `/etc/default/system-resource-monitor`
 - create and enable `system-resource-monitor.service`
 - start the service immediately and again on future boots
@@ -117,6 +133,14 @@ local-debug-logs/server-a_2026-04-20_to_2026-04-30.jsonl
 ```
 
 If a file for that hostname already exists, new rows are merged into the existing local file and duplicate rows are skipped. The file is renamed when the start or end date changes.
+
+The local analysis mode matches this layout:
+
+```bash
+python3 scripts/find_peak_samples.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30
+```
+
+Use the hostname printed by `download_server_logs.py` or the hostname prefix in the local filename.
 
 ## What It Monitors
 

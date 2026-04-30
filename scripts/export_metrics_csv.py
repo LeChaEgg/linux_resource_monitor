@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Optional
 
-from log_analysis_utils import add_log_source_args, iter_samples, resolve_log_files
+from log_analysis_utils import add_log_selection_args, iter_samples, resolve_log_files
 
 
 def first_dict(items: object) -> Optional[Dict[str, object]]:
@@ -20,7 +20,7 @@ def first_dict(items: object) -> Optional[Dict[str, object]]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export resource monitor samples to CSV for plotting.")
-    add_log_source_args(parser, default_days=7)
+    add_log_selection_args(parser)
     parser.add_argument(
         "--output",
         default="-",

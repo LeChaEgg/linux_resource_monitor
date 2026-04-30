@@ -3,7 +3,7 @@
 import argparse
 from typing import Dict, List, Optional
 
-from log_analysis_utils import add_log_source_args, format_gib_from_bytes, iter_samples, resolve_log_files
+from log_analysis_utils import add_log_selection_args, format_gib_from_bytes, iter_samples, resolve_log_files
 
 
 def sort_key(value: Optional[float]) -> float:
@@ -46,7 +46,7 @@ def format_metric_section(title: str, rows: List[str]) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="List high-watermark samples from resource monitor logs.")
-    add_log_source_args(parser, default_days=7)
+    add_log_selection_args(parser)
     parser.add_argument("--limit", type=int, default=5, help="Number of rows to show per section. Default: 5")
     parser.add_argument(
         "--process-name",

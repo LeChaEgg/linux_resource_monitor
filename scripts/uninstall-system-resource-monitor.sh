@@ -5,6 +5,7 @@ set -eu
 SERVICE_NAME="system-resource-monitor.service"
 BIN_PATH="/usr/local/bin/system-resource-monitor"
 SUMMARY_BIN_PATH="/usr/local/bin/system-resource-monitor-summary"
+LOG_UTILS_PATH="/usr/local/bin/log_analysis_utils.py"
 ENV_PATH="/etc/default/system-resource-monitor"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 DEFAULT_LOG_DIR="/var/log/system-resource-monitor"
@@ -68,7 +69,7 @@ else
     systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
 fi
 
-rm -f "$BIN_PATH" "$SUMMARY_BIN_PATH"
+rm -f "$BIN_PATH" "$SUMMARY_BIN_PATH" "$LOG_UTILS_PATH"
 
 if [ "$PURGE" -eq 1 ]; then
     rm -f "$ENV_PATH"
@@ -78,6 +79,7 @@ fi
 echo "Uninstalled ${SERVICE_NAME}"
 echo "Removed: $BIN_PATH"
 echo "Removed: $SUMMARY_BIN_PATH"
+echo "Removed: $LOG_UTILS_PATH"
 
 if [ "$PURGE" -eq 1 ]; then
     echo "Removed: $ENV_PATH"

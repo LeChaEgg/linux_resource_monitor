@@ -12,6 +12,7 @@ This tool is for long-run capacity sizing on Ubuntu servers:
 The implementation is in [resource_monitor.py](/path/to/system-resource-monitor/scripts/resource_monitor.py#L1) and the installer is [install-system-resource-monitor.sh](/path/to/system-resource-monitor/scripts/install-system-resource-monitor.sh#L1).
 The uninstaller is [uninstall-system-resource-monitor.sh](/path/to/system-resource-monitor/scripts/uninstall-system-resource-monitor.sh#L1).
 The sizing summary helper is [summarize_resource_monitor.py](/path/to/system-resource-monitor/scripts/summarize_resource_monitor.py#L1).
+Shared log selection lives in [log_analysis_utils.py](/path/to/system-resource-monitor/scripts/log_analysis_utils.py#L1).
 The SSH log downloader is [download_server_logs.py](/path/to/system-resource-monitor/scripts/download_server_logs.py#L1).
 
 ## Why this design
@@ -57,9 +58,10 @@ That will:
 
 1. install the executable to `/usr/local/bin/system-resource-monitor`
 2. install the summary helper to `/usr/local/bin/system-resource-monitor-summary`
-3. create `/etc/default/system-resource-monitor`
-4. create and enable `system-resource-monitor.service`
-5. start logging immediately and on every future boot
+3. install `log_analysis_utils.py` to `/usr/local/bin/log_analysis_utils.py` for the summary helper
+4. create `/etc/default/system-resource-monitor`
+5. create and enable `system-resource-monitor.service`
+6. start logging immediately and on every future boot
 
 ## Uninstall or roll back
 
@@ -109,15 +111,23 @@ local-debug-logs/server-a_2026-04-20_to_2026-04-30.jsonl
 
 If that hostname already has a local combined file, the new download is merged into it, exact duplicate rows are skipped, and the file is renamed when the date range expands. Use `--remote-log-dir` for a non-default remote log path, and `--port`, `--identity-file`, or repeated `--ssh-option` values for SSH connection details.
 
-You can then run the analysis helpers against either the default server log directory or the downloaded local copy:
+You can then run the analysis helpers against either the default server log directory or the downloaded local copy. By default they use `--mode auto` and the most recent 30 recorded days. Auto mode reads `/var/log/system-resource-monitor` when server logs are present; otherwise it reads the newest combined file in `local-debug-logs/`.
 
 ```bash
-python3 scripts/find_peak_samples.py --source downloaded --days 7
-python3 scripts/inspect_log_window.py --source downloaded --timestamp 2026-04-20T01:45:24Z --minutes-before 15 --minutes-after 15
-python3 scripts/export_metrics_csv.py --source downloaded --days 7 --output /tmp/resource-monitor.csv
+python3 scripts/find_peak_samples.py
 ```
 
-If you want to point at a custom directory instead, use `--log-dir /path/to/logs`. `--log-dir` overrides `--source`.
+Use `--mode server` to force server logs, or `--mode local` to force downloaded local logs. Local mode can be narrowed by hostname and date range:
+
+```bash
+python3 scripts/find_peak_samples.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30
+python3 scripts/inspect_log_window.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-20 --timestamp 2026-04-20T01:45:24Z --minutes-before 15 --minutes-after 15
+python3 scripts/export_metrics_csv.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30 --output /tmp/resource-monitor.csv
+```
+
+Use the hostname printed by `download_server_logs.py` or the hostname prefix in the local filename.
+
+If you want to point at a custom directory instead, use `--log-dir /path/to/logs`.
 
 ## Validate after install
 
@@ -139,13 +149,13 @@ Run one manual sample with a shorter interval:
 sudo /usr/local/bin/system-resource-monitor --once --interval 1 --top-n 5 --log-dir /tmp/system-resource-monitor
 ```
 
-Summarize the last 7 days for sizing:
+Summarize the most recent 30 recorded days for sizing:
 
 ```bash
-system-resource-monitor-summary --log-dir /var/log/system-resource-monitor --days 7
+system-resource-monitor-summary
 ```
 
-`--days 7` selects the most recent 7 log days that actually exist under the log directory, so gaps on days when the system was off are ignored.
+`--days 30` selects the most recent 30 log days that actually exist under the selected log directory, so gaps on days when the system was off are ignored.
 
 ## Sample log shape
 

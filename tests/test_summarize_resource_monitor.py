@@ -1,10 +1,14 @@
+import argparse
 import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "summarize_resource_monitor.py"
+SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
+MODULE_PATH = SCRIPTS_DIR / "summarize_resource_monitor.py"
+sys.path.insert(0, str(SCRIPTS_DIR))
 SPEC = importlib.util.spec_from_file_location("summarize_resource_monitor", MODULE_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -12,13 +16,14 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SummarizeResourceMonitorTests(unittest.TestCase):
-    def test_list_log_files_uses_recent_recorded_days_instead_of_calendar_window(self) -> None:
+    def test_resolve_log_files_uses_recent_recorded_days_instead_of_calendar_window(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             log_dir = Path(tmpdir)
             for day in ("2026-04-10", "2026-04-12", "2026-04-20", "2026-04-21"):
                 (log_dir / f"metrics-{day}.jsonl").write_text("{}", encoding="utf-8")
 
-            files = MODULE.list_log_files(log_dir, days=3)
+            args = argparse.Namespace(mode="server", log_dir=str(log_dir), days=3)
+            _, files = MODULE.resolve_log_files(args)
 
         self.assertEqual(
             [path.name for path in files],
@@ -47,7 +52,9 @@ class SummarizeResourceMonitorTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            report = MODULE.build_report(MODULE.list_log_files(log_dir, days=3))
+            args = argparse.Namespace(mode="server", log_dir=str(log_dir), days=3)
+            _, files = MODULE.resolve_log_files(args)
+            report = MODULE.build_report(files)
 
         self.assertIn("Samples: 2", report)
         self.assertIn("Skipped invalid samples: 1", report)

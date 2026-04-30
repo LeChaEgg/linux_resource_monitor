@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 
 import argparse
-import json
-import sys
 from collections import defaultdict
-from datetime import datetime
 from json import JSONDecodeError
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional
+
+from log_analysis_utils import add_log_selection_args, iter_samples, resolve_log_files
 
 
 def percentile(values: List[float], pct: float) -> Optional[float]:
@@ -42,42 +41,6 @@ def format_mib_per_sec(value: Optional[float]) -> str:
     return f"{value / (1024 ** 2):.2f} MiB/s"
 
 
-def parse_sample(line: str) -> Optional[Dict[str, object]]:
-    line = line.strip()
-    if not line:
-        return None
-    return json.loads(line)
-
-
-def warn_invalid_sample(path: Path, line_number: int, exc: JSONDecodeError) -> None:
-    sys.stderr.write(
-        f"Skipping invalid JSON sample in {path} line {line_number}: {exc.msg} at column {exc.colno}\n"
-    )
-
-
-def parse_log_file_date(path: Path) -> Optional[datetime.date]:
-    suffix = path.stem.replace("metrics-", "", 1)
-    try:
-        return datetime.strptime(suffix, "%Y-%m-%d").date()
-    except ValueError:
-        return None
-
-
-def list_log_files(log_dir: Path, days: Optional[int]) -> List[Path]:
-    dated_files: List[Tuple[datetime.date, Path]] = []
-    for path in log_dir.glob("metrics-*.jsonl"):
-        file_date = parse_log_file_date(path)
-        if file_date is None:
-            continue
-        dated_files.append((file_date, path))
-
-    dated_files.sort()
-    if days is None:
-        return [path for _, path in dated_files]
-
-    return [path for _, path in dated_files[-days:]]
-
-
 def detect_parallelism_bottleneck(cpu_p95: Optional[float], hottest_thread: Optional[Dict[str, object]]) -> Optional[str]:
     if cpu_p95 is None or hottest_thread is None:
         return None
@@ -107,87 +70,80 @@ def build_report(log_files: Iterable[Path]) -> str:
     sample_count = 0
     skipped_invalid_samples = 0
 
-    for path in log_files:
-        with path.open(encoding="utf-8") as handle:
-            for line_number, raw_line in enumerate(handle, start=1):
-                try:
-                    sample = parse_sample(raw_line)
-                except JSONDecodeError as exc:
-                    skipped_invalid_samples += 1
-                    warn_invalid_sample(path, line_number, exc)
+    def count_invalid(_path: Path, _line_number: int, _exc: JSONDecodeError) -> None:
+        nonlocal skipped_invalid_samples
+        skipped_invalid_samples += 1
+
+    for _, _, sample in iter_samples(log_files, on_invalid=count_invalid):
+        sample_count += 1
+        timestamp = str(sample.get("timestamp", "unknown"))
+        timestamps.append(timestamp)
+        hostname = str(sample.get("hostname", "unknown"))
+        hostnames.add(hostname)
+
+        cpu = sample.get("cpu", {})
+        if isinstance(cpu, dict) and cpu.get("used_pct") is not None:
+            cpu_used.append(float(cpu["used_pct"]))
+
+        memory = sample.get("memory", {})
+        if isinstance(memory, dict):
+            if memory.get("mem_used_pct") is not None:
+                mem_used.append(float(memory["mem_used_pct"]))
+            if memory.get("swap_used_pct") is not None:
+                swap_used.append(float(memory["swap_used_pct"]))
+
+        disk = sample.get("disk", {})
+        if isinstance(disk, dict):
+            if disk.get("read_bytes_per_sec") is not None:
+                disk_read_bps.append(float(disk["read_bytes_per_sec"]))
+            if disk.get("write_bytes_per_sec") is not None:
+                disk_write_bps.append(float(disk["write_bytes_per_sec"]))
+
+        network = sample.get("network", {})
+        if isinstance(network, dict):
+            if network.get("rx_bytes_per_sec") is not None:
+                network_rx_bps.append(float(network["rx_bytes_per_sec"]))
+            if network.get("tx_bytes_per_sec") is not None:
+                network_tx_bps.append(float(network["tx_bytes_per_sec"]))
+
+        gpu = sample.get("gpu", {})
+        if isinstance(gpu, dict):
+            for device in gpu.get("devices", []):
+                if not isinstance(device, dict):
                     continue
-                if sample is None:
-                    continue
+                device_key = f"{hostname}:{device.get('index', '?')}:{device.get('name', 'unknown')}"
+                if device.get("utilization_gpu_pct") is not None:
+                    gpu_util_by_device[device_key].append(float(device["utilization_gpu_pct"]))
+                if device.get("memory_used_pct") is not None:
+                    gpu_mem_by_device[device_key].append(float(device["memory_used_pct"]))
 
-                sample_count += 1
-                timestamp = str(sample.get("timestamp", "unknown"))
-                timestamps.append(timestamp)
-                hostname = str(sample.get("hostname", "unknown"))
-                hostnames.add(hostname)
+        for thread in sample.get("top_cpu_threads", []):
+            if not isinstance(thread, dict):
+                continue
+            top_thread_observations.append(
+                {
+                    "timestamp": timestamp,
+                    "hostname": hostname,
+                    "pid": thread.get("pid"),
+                    "tid": thread.get("tid"),
+                    "process_name": thread.get("process_name"),
+                    "thread_name": thread.get("thread_name"),
+                    "cpu_pct": float(thread.get("cpu_pct", 0.0)),
+                }
+            )
 
-                cpu = sample.get("cpu", {})
-                if isinstance(cpu, dict) and cpu.get("used_pct") is not None:
-                    cpu_used.append(float(cpu["used_pct"]))
-
-                memory = sample.get("memory", {})
-                if isinstance(memory, dict):
-                    if memory.get("mem_used_pct") is not None:
-                        mem_used.append(float(memory["mem_used_pct"]))
-                    if memory.get("swap_used_pct") is not None:
-                        swap_used.append(float(memory["swap_used_pct"]))
-
-                disk = sample.get("disk", {})
-                if isinstance(disk, dict):
-                    if disk.get("read_bytes_per_sec") is not None:
-                        disk_read_bps.append(float(disk["read_bytes_per_sec"]))
-                    if disk.get("write_bytes_per_sec") is not None:
-                        disk_write_bps.append(float(disk["write_bytes_per_sec"]))
-
-                network = sample.get("network", {})
-                if isinstance(network, dict):
-                    if network.get("rx_bytes_per_sec") is not None:
-                        network_rx_bps.append(float(network["rx_bytes_per_sec"]))
-                    if network.get("tx_bytes_per_sec") is not None:
-                        network_tx_bps.append(float(network["tx_bytes_per_sec"]))
-
-                gpu = sample.get("gpu", {})
-                if isinstance(gpu, dict):
-                    for device in gpu.get("devices", []):
-                        if not isinstance(device, dict):
-                            continue
-                        device_key = f"{hostname}:{device.get('index', '?')}:{device.get('name', 'unknown')}"
-                        if device.get("utilization_gpu_pct") is not None:
-                            gpu_util_by_device[device_key].append(float(device["utilization_gpu_pct"]))
-                        if device.get("memory_used_pct") is not None:
-                            gpu_mem_by_device[device_key].append(float(device["memory_used_pct"]))
-
-                for thread in sample.get("top_cpu_threads", []):
-                    if not isinstance(thread, dict):
-                        continue
-                    top_thread_observations.append(
-                        {
-                            "timestamp": timestamp,
-                            "hostname": hostname,
-                            "pid": thread.get("pid"),
-                            "tid": thread.get("tid"),
-                            "process_name": thread.get("process_name"),
-                            "thread_name": thread.get("thread_name"),
-                            "cpu_pct": float(thread.get("cpu_pct", 0.0)),
-                        }
-                    )
-
-                for process in sample.get("top_memory_processes", []):
-                    if not isinstance(process, dict):
-                        continue
-                    top_memory_observations.append(
-                        {
-                            "timestamp": timestamp,
-                            "hostname": hostname,
-                            "pid": process.get("pid"),
-                            "process_name": process.get("process_name"),
-                            "rss_bytes": float(process.get("rss_bytes", 0.0)),
-                        }
-                    )
+        for process in sample.get("top_memory_processes", []):
+            if not isinstance(process, dict):
+                continue
+            top_memory_observations.append(
+                {
+                    "timestamp": timestamp,
+                    "hostname": hostname,
+                    "pid": process.get("pid"),
+                    "process_name": process.get("process_name"),
+                    "rss_bytes": float(process.get("rss_bytes", 0.0)),
+                }
+            )
 
     if sample_count == 0:
         return "No samples found."
@@ -286,30 +242,13 @@ def build_report(log_files: Iterable[Path]) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Summarize system resource monitor JSONL logs.")
-    parser.add_argument(
-        "--log-dir",
-        default="/var/log/system-resource-monitor",
-        help="Directory containing metrics-YYYY-MM-DD.jsonl files.",
-    )
-    parser.add_argument(
-        "--days",
-        type=int,
-        default=7,
-        help="Number of recent log days with records to include. Use 0 to include all files. Default: 7",
-    )
+    add_log_selection_args(parser)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    log_dir = Path(args.log_dir)
-    if not log_dir.exists():
-        raise SystemExit(f"Log directory does not exist: {log_dir}")
-    if args.days < 0:
-        raise SystemExit("--days must be 0 or greater")
-
-    days = None if args.days == 0 else args.days
-    log_files = list_log_files(log_dir, days)
+    _, log_files = resolve_log_files(args)
     print(build_report(log_files))
     return 0
 

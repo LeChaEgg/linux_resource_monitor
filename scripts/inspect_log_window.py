@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Dict, List
 
 from log_analysis_utils import (
-    add_log_source_args,
+    add_log_selection_args,
     format_gib_from_bytes,
     format_mib_per_sec_from_bytes,
     iter_samples,
@@ -46,7 +46,7 @@ def summarize_top_threads(sample: Dict[str, object], limit: int) -> List[str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Inspect a time window around a specific resource-monitor timestamp.")
-    add_log_source_args(parser, default_days=0)
+    add_log_selection_args(parser)
     parser.add_argument(
         "--timestamp",
         required=True,
