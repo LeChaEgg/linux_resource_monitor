@@ -55,7 +55,7 @@ def add_log_selection_args(parser: argparse.ArgumentParser, *, default_days: int
     parser.add_argument(
         "--hostname",
         default=None,
-        help="Local mode: hostname to analyze from downloaded logs.",
+        help="Local/auto mode: hostname to analyze from downloaded logs.",
     )
     parser.add_argument(
         "--start-date",

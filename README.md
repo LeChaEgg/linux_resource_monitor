@@ -40,6 +40,24 @@ Summarize the most recent 30 recorded days:
 system-resource-monitor-summary
 ```
 
+Print only the one-column values block for Excel or Google Sheets:
+
+```bash
+system-resource-monitor-summary --spreadsheet-values-only
+```
+
+On macOS, copy that block directly to the clipboard:
+
+```bash
+system-resource-monitor-summary --spreadsheet-values-only | pbcopy
+```
+
+For a specific downloaded host in this checkout, put `--hostname` before the pipe:
+
+```bash
+python3 scripts/summarize_resource_monitor.py --mode local --hostname server-a --spreadsheet-values-only | pbcopy
+```
+
 Summarize downloaded local logs without installing the system command:
 
 ```bash

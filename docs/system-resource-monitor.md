@@ -157,6 +157,24 @@ Summarize the most recent 30 recorded days for sizing:
 system-resource-monitor-summary
 ```
 
+The normal summary also ends with a `Spreadsheet Values` block. To print only that one-column value list for Excel or Google Sheets:
+
+```bash
+system-resource-monitor-summary --spreadsheet-values-only
+```
+
+The values-only mode uses CRLF row separators for spreadsheet clipboard compatibility. On macOS, this copies the values directly:
+
+```bash
+system-resource-monitor-summary --spreadsheet-values-only | pbcopy
+```
+
+For a specific downloaded host in this checkout, put `--hostname` before the pipe:
+
+```bash
+python3 scripts/summarize_resource_monitor.py --mode local --hostname server-a --spreadsheet-values-only | pbcopy
+```
+
 When working from a local checkout without installing the system command:
 
 ```bash

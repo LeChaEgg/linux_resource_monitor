@@ -9,6 +9,9 @@ from typing import Dict, Iterable, List, Optional
 from log_analysis_utils import add_log_selection_args, iter_samples, resolve_log_files
 
 
+SPREADSHEET_ROW_SEPARATOR = "\r\n"
+
+
 def percentile(values: List[float], pct: float) -> Optional[float]:
     if not values:
         return None
@@ -41,6 +44,54 @@ def format_mib_per_sec(value: Optional[float]) -> str:
     return f"{value / (1024 ** 2):.2f} MiB/s"
 
 
+def parse_gpu_index(device: Dict[str, object]) -> Optional[int]:
+    index = device.get("index")
+    try:
+        return int(str(index))
+    except (TypeError, ValueError):
+        return None
+
+
+def build_spreadsheet_values(
+    cpu_used: List[float],
+    mem_used: List[float],
+    swap_used: List[float],
+    network_rx_bps: List[float],
+    network_tx_bps: List[float],
+    gpu_util_by_index: Dict[int, List[float]],
+    gpu_mem_by_index: Dict[int, List[float]],
+) -> List[str]:
+    values = [
+        format_pct(percentile(cpu_used, 50)),
+        format_pct(percentile(cpu_used, 95)),
+        format_pct(percentile(cpu_used, 99)),
+        format_pct(max(cpu_used) if cpu_used else None),
+        format_pct(percentile(mem_used, 50)),
+        format_pct(percentile(mem_used, 95)),
+        format_pct(percentile(mem_used, 99)),
+        format_pct(max(mem_used) if mem_used else None),
+        format_pct(max(swap_used) if swap_used else None),
+        format_mib_per_sec(percentile(network_rx_bps, 95)),
+        format_mib_per_sec(max(network_rx_bps) if network_rx_bps else None),
+        format_mib_per_sec(percentile(network_tx_bps, 95)),
+        format_mib_per_sec(max(network_tx_bps) if network_tx_bps else None),
+    ]
+
+    for gpu_index in range(3):
+        util_values = gpu_util_by_index.get(gpu_index, [])
+        mem_values = gpu_mem_by_index.get(gpu_index, [])
+        values.extend(
+            [
+                format_pct(percentile(util_values, 95)),
+                format_pct(max(util_values) if util_values else None),
+                format_pct(percentile(mem_values, 95)),
+                format_pct(max(mem_values) if mem_values else None),
+            ]
+        )
+
+    return values
+
+
 def detect_parallelism_bottleneck(cpu_p95: Optional[float], hottest_thread: Optional[Dict[str, object]]) -> Optional[str]:
     if cpu_p95 is None or hottest_thread is None:
         return None
@@ -53,7 +104,7 @@ def detect_parallelism_bottleneck(cpu_p95: Optional[float], hottest_thread: Opti
     return None
 
 
-def build_report(log_files: Iterable[Path]) -> str:
+def build_report(log_files: Iterable[Path], spreadsheet_values_only: bool = False) -> str:
     timestamps: List[str] = []
     cpu_used: List[float] = []
     mem_used: List[float] = []
@@ -64,6 +115,8 @@ def build_report(log_files: Iterable[Path]) -> str:
     network_tx_bps: List[float] = []
     gpu_util_by_device: Dict[str, List[float]] = defaultdict(list)
     gpu_mem_by_device: Dict[str, List[float]] = defaultdict(list)
+    gpu_util_by_index: Dict[int, List[float]] = defaultdict(list)
+    gpu_mem_by_index: Dict[int, List[float]] = defaultdict(list)
     top_thread_observations: List[Dict[str, object]] = []
     top_memory_observations: List[Dict[str, object]] = []
     hostnames = set()
@@ -113,9 +166,17 @@ def build_report(log_files: Iterable[Path]) -> str:
                     continue
                 device_key = f"{hostname}:{device.get('index', '?')}:{device.get('name', 'unknown')}"
                 if device.get("utilization_gpu_pct") is not None:
-                    gpu_util_by_device[device_key].append(float(device["utilization_gpu_pct"]))
+                    util_pct = float(device["utilization_gpu_pct"])
+                    gpu_util_by_device[device_key].append(util_pct)
+                    device_index = parse_gpu_index(device)
+                    if device_index is not None:
+                        gpu_util_by_index[device_index].append(util_pct)
                 if device.get("memory_used_pct") is not None:
-                    gpu_mem_by_device[device_key].append(float(device["memory_used_pct"]))
+                    mem_pct = float(device["memory_used_pct"])
+                    gpu_mem_by_device[device_key].append(mem_pct)
+                    device_index = parse_gpu_index(device)
+                    if device_index is not None:
+                        gpu_mem_by_index[device_index].append(mem_pct)
 
         for thread in sample.get("top_cpu_threads", []):
             if not isinstance(thread, dict):
@@ -161,6 +222,18 @@ def build_report(log_files: Iterable[Path]) -> str:
     hottest_thread = top_thread_observations[0] if top_thread_observations else None
     fattest_process = top_memory_observations[0] if top_memory_observations else None
     bottleneck_note = detect_parallelism_bottleneck(cpu_p95, hottest_thread)
+    spreadsheet_values = build_spreadsheet_values(
+        cpu_used,
+        mem_used,
+        swap_used,
+        network_rx_bps,
+        network_tx_bps,
+        gpu_util_by_index,
+        gpu_mem_by_index,
+    )
+
+    if spreadsheet_values_only:
+        return SPREADSHEET_ROW_SEPARATOR.join(spreadsheet_values)
 
     lines: List[str] = []
     lines.append("Resource Monitor Summary")
@@ -237,19 +310,28 @@ def build_report(log_files: Iterable[Path]) -> str:
         lines.append("Observation")
         lines.append(f"  {bottleneck_note}")
 
+    lines.append("")
+    lines.append("Spreadsheet Values")
+    lines.extend(spreadsheet_values)
+
     return "\n".join(lines)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Summarize system resource monitor JSONL logs.")
     add_log_selection_args(parser)
+    parser.add_argument(
+        "--spreadsheet-values-only",
+        action="store_true",
+        help="Print only the one-column spreadsheet value list, without the full summary.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     _, log_files = resolve_log_files(args)
-    print(build_report(log_files))
+    print(build_report(log_files, spreadsheet_values_only=args.spreadsheet_values_only))
     return 0
 
 
