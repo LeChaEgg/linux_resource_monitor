@@ -43,7 +43,7 @@ system-resource-monitor-summary
 Download all logs from a server for local analysis:
 
 ```bash
-python3 scripts/download_server_logs.py robotruck@100.64.0.6
+python3 scripts/download_server_logs.py host@x.x.x.x
 ```
 
 Find the highest memory, swap, CPU, and process-RSS samples:
