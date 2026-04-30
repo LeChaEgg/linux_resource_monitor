@@ -120,12 +120,14 @@ python3 scripts/find_peak_samples.py
 Use `--mode server` to force server logs, or `--mode local` to force downloaded local logs. Local mode can be narrowed by hostname and date range:
 
 ```bash
+python3 scripts/summarize_resource_monitor.py --hostname server-a
 python3 scripts/find_peak_samples.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30
 python3 scripts/inspect_log_window.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-20 --timestamp 2026-04-20T01:45:24Z --minutes-before 15 --minutes-after 15
-python3 scripts/export_metrics_csv.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30 --output /tmp/resource-monitor.csv
+python3 scripts/export_metrics_csv.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30
 ```
 
 Use the hostname printed by `download_server_logs.py` or the hostname prefix in the local filename.
+The CSV exporter writes to `local-debug-logs/resource-monitor_<host>_<start>_to_<end>.csv` by default. Use `--output /path/to/file.csv` for a custom file, or `--output -` for stdout.
 
 If you want to point at a custom directory instead, use `--log-dir /path/to/logs`.
 
@@ -153,6 +155,12 @@ Summarize the most recent 30 recorded days for sizing:
 
 ```bash
 system-resource-monitor-summary
+```
+
+When working from a local checkout without installing the system command:
+
+```bash
+python3 scripts/summarize_resource_monitor.py --hostname server-a
 ```
 
 `--days 30` selects the most recent 30 log days that actually exist under the selected log directory, so gaps on days when the system was off are ignored.

@@ -3,10 +3,18 @@
 import argparse
 import csv
 import sys
+import tempfile
+from datetime import date
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 
-from log_analysis_utils import add_log_selection_args, iter_samples, resolve_log_files
+from log_analysis_utils import (
+    DEFAULT_DOWNLOADED_LOG_DIR,
+    add_log_selection_args,
+    iter_samples,
+    parse_sample_timestamp_date,
+    resolve_log_files,
+)
 
 
 def first_dict(items: object) -> Optional[Dict[str, object]]:
@@ -23,10 +31,36 @@ def parse_args() -> argparse.Namespace:
     add_log_selection_args(parser)
     parser.add_argument(
         "--output",
-        default="-",
-        help="Write CSV to this path. Use - to write to stdout. Default: -",
+        default=None,
+        help=(
+            "Write CSV to this path. Use - to write to stdout. "
+            "Default: local-debug-logs/resource-monitor_<host>_<start>_to_<end>.csv"
+        ),
     )
     return parser.parse_args()
+
+
+def safe_filename_part(value: str) -> str:
+    cleaned = "".join(char if char.isalnum() or char in "._-" else "_" for char in value.strip())
+    return cleaned.strip("._-") or "unknown"
+
+
+def default_output_path(hostnames: Set[str], sample_dates: Set[date]) -> Path:
+    if len(hostnames) == 1:
+        host_part = safe_filename_part(next(iter(hostnames)))
+    elif hostnames:
+        host_part = "multi-host"
+    else:
+        host_part = "unknown-host"
+
+    if sample_dates:
+        start_date = min(sample_dates).isoformat()
+        end_date = max(sample_dates).isoformat()
+    else:
+        start_date = "unknown"
+        end_date = "unknown"
+
+    return DEFAULT_DOWNLOADED_LOG_DIR / f"resource-monitor_{host_part}_{start_date}_to_{end_date}.csv"
 
 
 def main() -> int:
@@ -59,7 +93,23 @@ def main() -> int:
 
     output_handle = sys.stdout
     managed_handle = None
-    if args.output != "-":
+    temp_output_path: Optional[Path] = None
+
+    if args.output is None:
+        DEFAULT_DOWNLOADED_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        temp_file = tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            newline="",
+            dir=DEFAULT_DOWNLOADED_LOG_DIR,
+            prefix=".resource-monitor-export-",
+            suffix=".csv",
+            delete=False,
+        )
+        managed_handle = temp_file
+        temp_output_path = Path(temp_file.name)
+        output_handle = managed_handle
+    elif args.output != "-":
         output_path = Path(args.output).expanduser()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         managed_handle = output_path.open("w", encoding="utf-8", newline="")
@@ -68,8 +118,17 @@ def main() -> int:
     try:
         writer = csv.DictWriter(output_handle, fieldnames=fieldnames)
         writer.writeheader()
+        hostnames: Set[str] = set()
+        sample_dates: Set[date] = set()
 
         for _, _, sample in iter_samples(log_files):
+            hostname = sample.get("hostname")
+            if hostname is not None:
+                hostnames.add(str(hostname))
+            sample_date = parse_sample_timestamp_date(sample)
+            if sample_date is not None:
+                sample_dates.add(sample_date)
+
             cpu = sample.get("cpu", {})
             memory = sample.get("memory", {})
             disk = sample.get("disk", {})
@@ -120,6 +179,12 @@ def main() -> int:
     finally:
         if managed_handle is not None:
             managed_handle.close()
+    if temp_output_path is not None:
+        final_output_path = default_output_path(hostnames, sample_dates)
+        temp_output_path.replace(final_output_path)
+        print(f"Wrote CSV: {final_output_path}")
+    elif args.output and args.output != "-":
+        print(f"Wrote CSV: {Path(args.output).expanduser()}")
 
     return 0
 

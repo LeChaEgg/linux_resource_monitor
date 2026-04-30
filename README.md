@@ -40,6 +40,12 @@ Summarize the most recent 30 recorded days:
 system-resource-monitor-summary
 ```
 
+Summarize downloaded local logs without installing the system command:
+
+```bash
+python3 scripts/summarize_resource_monitor.py --hostname server-a
+```
+
 Download all logs from a server for local analysis:
 
 ```bash
@@ -67,7 +73,7 @@ python3 scripts/inspect_log_window.py --mode local --hostname server-a --start-d
 Export samples to CSV for plotting:
 
 ```bash
-python3 scripts/export_metrics_csv.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30 --output /tmp/resource-monitor.csv
+python3 scripts/export_metrics_csv.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30
 ```
 
 Take one manual sample into a temp directory:
@@ -97,6 +103,8 @@ Analysis scripts support three modes:
 - `--mode local` reads combined downloader files in `local-debug-logs/`
 
 All analysis scripts accept `--log-dir` if you want to point at a custom directory directly. `--days 30` means the most recent 30 log days that actually have records, not necessarily the last 30 calendar dates. In local mode, `--hostname`, `--start-date`, and `--end-date` are optional filters; when omitted, the newest combined local log file is used.
+
+`export_metrics_csv.py` writes to `local-debug-logs/resource-monitor_<host>_<start>_to_<end>.csv` by default. Use `--output /path/to/file.csv` for a custom file, or `--output -` for stdout.
 
 ## Install Details
 
