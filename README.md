@@ -20,7 +20,7 @@ cd system-resource-monitor
 sudo sh scripts/install-system-resource-monitor.sh
 ```
 
-## Useful Commands
+## On the Server
 
 Check service state:
 
@@ -34,58 +34,38 @@ Tail today's raw samples:
 tail -n 5 /var/log/system-resource-monitor/metrics-$(date +%F).jsonl
 ```
 
-Summarize the most recent 30 recorded days:
+Run a percentile summary of the most recent 30 recorded days:
 
 ```bash
 system-resource-monitor-summary
 ```
 
-Print only the one-column values block for Excel or Google Sheets:
+## On Your Local Machine
 
-```bash
-system-resource-monitor-summary --spreadsheet-values-only
-```
-
-On macOS, copy that block directly to the clipboard:
-
-```bash
-system-resource-monitor-summary --spreadsheet-values-only | pbcopy
-```
-
-For a specific downloaded host in this checkout, put `--hostname` before the pipe:
-
-```bash
-python3 scripts/summarize_resource_monitor.py --mode local --hostname server-a --spreadsheet-values-only | pbcopy
-```
-
-Summarize downloaded local logs without installing the system command:
-
-```bash
-python3 scripts/summarize_resource_monitor.py --hostname server-a
-```
-
-Download all logs from a server for local analysis:
+Download all logs from a server:
 
 ```bash
 python3 scripts/download_server_logs.py host@x.x.x.x
 ```
 
-Find the highest memory, swap, CPU, and process-RSS samples:
+The downloader detects the remote hostname and writes a combined file to `local-debug-logs/`, named like `server-a_2026-04-20_to_2026-04-30.jsonl`. If a file for that hostname already exists, new rows are merged in and duplicates are skipped.
+
+Summarize downloaded logs:
 
 ```bash
-python3 scripts/find_peak_samples.py
+python3 scripts/summarize_resource_monitor.py --hostname server-a
 ```
 
-Find the highest samples in downloaded local logs for one host and date range:
+Find the highest CPU, memory, swap, and process-RSS samples:
 
 ```bash
-python3 scripts/find_peak_samples.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30
+python3 scripts/find_peak_samples.py --mode local --hostname server-a
 ```
 
-Inspect a 30-minute window around an incident timestamp:
+Inspect a time window around an incident timestamp:
 
 ```bash
-python3 scripts/inspect_log_window.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-20 --timestamp 2026-04-20T01:45:24Z --minutes-before 15 --minutes-after 15
+python3 scripts/inspect_log_window.py --mode local --hostname server-a --timestamp 2026-04-20T01:45:24Z
 ```
 
 Export samples to CSV for plotting:
@@ -94,35 +74,31 @@ Export samples to CSV for plotting:
 python3 scripts/export_metrics_csv.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30
 ```
 
-Take one manual sample into a temp directory:
+`export_metrics_csv.py` writes to `local-debug-logs/resource-monitor_<host>_<start>_to_<end>.csv` by default. Use `--output /path/to/file.csv` for a custom path, or `--output -` for stdout.
+
+### Filtering options
+
+All analysis scripts default to `--mode auto` and the most recent 30 recorded days.
+
+- `--mode auto` uses server logs from `/var/log/system-resource-monitor` when present, otherwise falls back to the newest combined file in `local-debug-logs/`
+- `--mode server` reads `/var/log/system-resource-monitor` directly and uses `--days`
+- `--mode local` reads combined files in `local-debug-logs/`
+
+In local mode, `--hostname`, `--start-date`, and `--end-date` are optional filters; when omitted, the newest combined file is used. `--days 30` means the most recent 30 log days that actually have records, not necessarily the last 30 calendar dates.
+
+### Spreadsheet export
+
+Print only the values column for pasting into Excel or Google Sheets:
 
 ```bash
-sudo /usr/local/bin/system-resource-monitor --once --interval 1 --top-n 5 --log-dir /tmp/system-resource-monitor
+python3 scripts/summarize_resource_monitor.py --hostname server-a --spreadsheet-values-only
 ```
 
-Remove the service and binaries while keeping logs and config:
+On macOS, copy directly to the clipboard:
 
 ```bash
-sudo sh scripts/uninstall-system-resource-monitor.sh
+python3 scripts/summarize_resource_monitor.py --hostname server-a --spreadsheet-values-only | pbcopy
 ```
-
-Fully roll back and delete logs and config too:
-
-```bash
-sudo sh scripts/uninstall-system-resource-monitor.sh --purge
-```
-
-Analysis scripts default to `--mode auto` and the most recent 30 recorded days. Auto mode uses server logs from `/var/log/system-resource-monitor` when present; otherwise it uses the newest combined file in `local-debug-logs/`.
-
-Analysis scripts support three modes:
-
-- `--mode auto` chooses server logs first, then downloaded local logs
-- `--mode server` reads `/var/log/system-resource-monitor` and uses `--days`
-- `--mode local` reads combined downloader files in `local-debug-logs/`
-
-All analysis scripts accept `--log-dir` if you want to point at a custom directory directly. `--days 30` means the most recent 30 log days that actually have records, not necessarily the last 30 calendar dates. In local mode, `--hostname`, `--start-date`, and `--end-date` are optional filters; when omitted, the newest combined local log file is used.
-
-`export_metrics_csv.py` writes to `local-debug-logs/resource-monitor_<host>_<start>_to_<end>.csv` by default. Use `--output /path/to/file.csv` for a custom file, or `--output -` for stdout.
 
 ## Install Details
 
@@ -144,29 +120,17 @@ RETAIN_DAYS=30
 LOG_DIR=/var/log/system-resource-monitor
 ```
 
-## Local Debug Logs
-
-For local debugging, this repo reserves an ignored directory:
+To remove the service and binaries while keeping logs and config:
 
 ```bash
-local-debug-logs/
+sudo sh scripts/uninstall-system-resource-monitor.sh
 ```
 
-The downloader reads the remote `/var/log/system-resource-monitor/metrics-*.jsonl` files, detects the remote hostname, and writes one local file named like:
-
-```text
-local-debug-logs/server-a_2026-04-20_to_2026-04-30.jsonl
-```
-
-If a file for that hostname already exists, new rows are merged into the existing local file and duplicate rows are skipped. The file is renamed when the start or end date changes.
-
-The local analysis mode matches this layout:
+To fully roll back including logs and config:
 
 ```bash
-python3 scripts/find_peak_samples.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30
+sudo sh scripts/uninstall-system-resource-monitor.sh --purge
 ```
-
-Use the hostname printed by `download_server_logs.py` or the hostname prefix in the local filename.
 
 ## What It Monitors
 
