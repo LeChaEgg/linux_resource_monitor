@@ -9,11 +9,14 @@ This tool is for long-run capacity sizing on Ubuntu servers:
 - keep daily log files for later analysis
 - capture the hottest threads and memory-heavy processes
 
-The implementation is in [resource_monitor.py](/path/to/system-resource-monitor/scripts/resource_monitor.py#L1) and the installer is [install-system-resource-monitor.sh](/path/to/system-resource-monitor/scripts/install-system-resource-monitor.sh#L1).
-The uninstaller is [uninstall-system-resource-monitor.sh](/path/to/system-resource-monitor/scripts/uninstall-system-resource-monitor.sh#L1).
-The sizing summary helper is [summarize_resource_monitor.py](/path/to/system-resource-monitor/scripts/summarize_resource_monitor.py#L1).
-Shared log selection lives in [log_analysis_utils.py](/path/to/system-resource-monitor/scripts/log_analysis_utils.py#L1).
-The SSH log downloader is [download_server_logs.py](/path/to/system-resource-monitor/scripts/download_server_logs.py#L1).
+The collector is `src/srmon/collect/monitor.py`; the installer is
+`scripts/install-system-resource-monitor.sh` and the uninstaller is
+`scripts/uninstall-system-resource-monitor.sh`. The local toolkit is the `srmon`
+package under `src/srmon/`: summaries in `srmon/analysis/summary.py`, peaks in
+`srmon/analysis/peaks.py`, plotting in `srmon/plotting/timeseries.py`, the SSH
+downloader in `srmon/ingest/download.py`, the monthly report in `srmon/report/`,
+and shared log selection in `srmon/core/`. Every command is reachable via the
+unified `srmon` CLI (or `python3 -m srmon <command>`).
 
 ## Why this design
 
@@ -57,8 +60,8 @@ sudo sh /path/to/system-resource-monitor/scripts/install-system-resource-monitor
 That will:
 
 1. install the executable to `/usr/local/bin/system-resource-monitor`
-2. install the summary helper to `/usr/local/bin/system-resource-monitor-summary`
-3. install `log_analysis_utils.py` to `/usr/local/bin/log_analysis_utils.py` for the summary helper
+2. install the summary command to `/usr/local/bin/system-resource-monitor-summary`
+3. install the `srmon` package to `/usr/local/lib/system-resource-monitor/` for the summary command (standard library only)
 4. create `/etc/default/system-resource-monitor`
 5. create and enable `system-resource-monitor.service`
 6. start logging immediately and on every future boot
@@ -97,39 +100,66 @@ sudo systemctl restart system-resource-monitor.service
 
 ## Local log analysis workflow
 
-When you need to investigate an incident away from the server, download the remote logs into the repo-local `local-debug-logs/` directory. That directory is ignored by git, so downloaded logs stay local.
+Install the workstation toolkit once (Python >= 3.11). The recommended path puts
+`srmon` on your `PATH` with no virtualenv to activate:
 
 ```bash
-python3 scripts/download_server_logs.py robotruck@100.64.0.6
+uv tool install --editable . --with matplotlib
 ```
 
-The downloader reads all remote `metrics-YYYY-MM-DD.jsonl` files from `/var/log/system-resource-monitor`, detects the server hostname, and writes a combined local file named like:
+(Alternatives: `pipx install -e ".[report]"`, or a venv used without activating it
+via `.venv/bin/srmon` / `uv run srmon`.) matplotlib is needed only for plotting and
+the monthly report.
 
-```text
-local-debug-logs/server-a_2026-04-20_to_2026-04-30.jsonl
-```
+### Monthly report (single command)
 
-If that hostname already has a local combined file, the new download is merged into it, exact duplicate rows are skipped, and the file is renamed when the date range expands. Use `--remote-log-dir` for a non-default remote log path, and `--port`, `--identity-file`, or repeated `--ssh-option` values for SSH connection details.
-
-You can then run the analysis helpers against either the default server log directory or the downloaded local copy. By default they use `--mode auto` and the most recent 30 recorded days. Auto mode reads `/var/log/system-resource-monitor` when server logs are present; otherwise it reads the newest combined file in `local-debug-logs/`.
+The fastest path downloads, plots, finds peaks, and summarizes a host in one step.
+A `hosts.toml` in the current directory or repo root is used automatically:
 
 ```bash
-python3 scripts/find_peak_samples.py
+srmon report --month 2026-05                       # every host in hosts.toml
+srmon report --inventory other.toml --month 2026-05 # a different inventory
+srmon report robotruck@100.64.0.6 --month 2026-05   # a single host, no inventory
 ```
 
-Use `--mode server` to force server logs, or `--mode local` to force downloaded local logs. Local mode can be narrowed by hostname and date range:
+Output lands in `reports/<host>/<YYYY-MM>/report.md` with the CPU/memory/swap plot
+embedded above the peaks and summary. It defaults to the current month and is
+incremental: hosts with no new in-month data are skipped (`--force` overrides,
+`--skip-download` reuses already-downloaded logs). Hosts that do not record every
+day simply show fewer "days with data" — coverage is reported as-is.
+
+### Individual steps
+
+When you need to investigate an incident, download the remote logs into the
+repo-local `local-debug-logs/` directory (ignored by git):
 
 ```bash
-python3 scripts/summarize_resource_monitor.py --hostname server-a
-python3 scripts/find_peak_samples.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30
-python3 scripts/inspect_log_window.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-20 --timestamp 2026-04-20T01:45:24Z --minutes-before 15 --minutes-after 15
-python3 scripts/export_metrics_csv.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30
+srmon download robotruck@100.64.0.6
 ```
 
-Use the hostname printed by `download_server_logs.py` or the hostname prefix in the local filename.
-The CSV exporter writes to `local-debug-logs/resource-monitor_<host>_<start>_to_<end>.csv` by default. Use `--output /path/to/file.csv` for a custom file, or `--output -` for stdout.
+The downloader reads all remote `metrics-YYYY-MM-DD.jsonl` files from
+`/var/log/system-resource-monitor`, detects the hostname, and writes a combined
+local file named like `local-debug-logs/server-a_2026-04-20_to_2026-04-30.jsonl`,
+merging into any existing file for that host, skipping duplicate rows, and renaming
+when the date range expands. Use `--remote-log-dir`, `--port`, `--identity-file`,
+or repeated `--ssh-option` values for connection details.
 
-If you want to point at a custom directory instead, use `--log-dir /path/to/logs`.
+The analysis commands default to `--mode auto` and the most recent 30 recorded
+days. Auto reads `/var/log/system-resource-monitor` when present; otherwise the
+newest combined file in `local-debug-logs/`. Use `--mode server` or `--mode local`
+to force one, and narrow local logs by hostname and date range:
+
+```bash
+srmon summary --hostname server-a
+srmon peaks   --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30
+srmon window  --mode local --hostname server-a --timestamp 2026-04-20T01:45:24Z --minutes-before 15 --minutes-after 15
+srmon export  --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30
+srmon plot    --mode local --hostname server-a
+```
+
+`srmon export` writes `local-debug-logs/resource-monitor_<host>_<start>_to_<end>.csv`
+by default (`--output FILE` for a custom path, `--output -` for stdout). Point any
+command at a custom directory with `--log-dir /path/to/logs`.
 
 ## Validate after install
 
@@ -169,16 +199,16 @@ The values-only mode uses CRLF row separators for spreadsheet clipboard compatib
 system-resource-monitor-summary --spreadsheet-values-only | pbcopy
 ```
 
-For a specific downloaded host in this checkout, put `--hostname` before the pipe:
+For a specific downloaded host on your workstation, put `--hostname` before the pipe:
 
 ```bash
-python3 scripts/summarize_resource_monitor.py --mode local --hostname server-a --spreadsheet-values-only | pbcopy
+srmon summary --mode local --hostname server-a --spreadsheet-values-only | pbcopy
 ```
 
-When working from a local checkout without installing the system command:
+The same command run from a source checkout without installing `srmon`:
 
 ```bash
-python3 scripts/summarize_resource_monitor.py --hostname server-a
+uv run srmon summary --hostname server-a
 ```
 
 `--days 30` selects the most recent 30 log days that actually exist under the selected log directory, so gaps on days when the system was off are ignored.

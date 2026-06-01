@@ -1,22 +1,17 @@
 import argparse
-import importlib.util
 import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
-MODULE_PATH = SCRIPTS_DIR / "summarize_resource_monitor.py"
-sys.path.insert(0, str(SCRIPTS_DIR))
-SPEC = importlib.util.spec_from_file_location("summarize_resource_monitor", MODULE_PATH)
-MODULE = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-SPEC.loader.exec_module(MODULE)
+from srmon.analysis.summary import build_report  # noqa: E402
+from srmon.core.selection import resolve_log_files  # noqa: E402
 
 
-class SummarizeResourceMonitorTests(unittest.TestCase):
+class SummaryTests(unittest.TestCase):
     def test_resolve_log_files_uses_recent_recorded_days_instead_of_calendar_window(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             log_dir = Path(tmpdir)
@@ -24,7 +19,7 @@ class SummarizeResourceMonitorTests(unittest.TestCase):
                 (log_dir / f"metrics-{day}.jsonl").write_text("{}", encoding="utf-8")
 
             args = argparse.Namespace(mode="server", log_dir=str(log_dir), days=3)
-            _, files = MODULE.resolve_log_files(args)
+            _, files = resolve_log_files(args)
 
         self.assertEqual(
             [path.name for path in files],
@@ -54,8 +49,8 @@ class SummarizeResourceMonitorTests(unittest.TestCase):
             )
 
             args = argparse.Namespace(mode="server", log_dir=str(log_dir), days=3)
-            _, files = MODULE.resolve_log_files(args)
-            report = MODULE.build_report(files)
+            _, files = resolve_log_files(args)
+            report = build_report(files)
 
         self.assertIn("Samples: 2", report)
         self.assertIn("Skipped invalid samples: 1", report)
@@ -66,7 +61,7 @@ class SummarizeResourceMonitorTests(unittest.TestCase):
             log_path = Path(tmpdir) / "metrics-2026-04-20.jsonl"
             log_path.write_text('{"timestamp":"2026-04-20T00:00:00Z"\n', encoding="utf-8")
 
-            report = MODULE.build_report([log_path])
+            report = build_report([log_path])
 
         self.assertEqual(report, "No samples found.")
 
@@ -109,8 +104,8 @@ class SummarizeResourceMonitorTests(unittest.TestCase):
             log_path = Path(tmpdir) / "metrics-2026-04-20.jsonl"
             log_path.write_text("\n".join(json.dumps(sample) for sample in samples) + "\n", encoding="utf-8")
 
-            report = MODULE.build_report([log_path])
-            spreadsheet_only = MODULE.build_report([log_path], spreadsheet_values_only=True)
+            report = build_report([log_path])
+            spreadsheet_only = build_report([log_path], spreadsheet_values_only=True)
 
         expected_values = [
             "20.00%",

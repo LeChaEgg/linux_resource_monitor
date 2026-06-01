@@ -1,0 +1,5 @@
+# Dependencies for the LOCAL analysis workstation (plotting + monthly report).
+#
+# The on-host collector (srmon.collect.monitor) and the summary/peaks/export/
+# window commands use only the Python standard library and need nothing here.
+matplotlib>=3.7

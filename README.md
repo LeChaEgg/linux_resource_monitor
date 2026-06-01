@@ -1,135 +1,128 @@
 # System Resource Monitor
 
-Lightweight Ubuntu resource monitoring for long-run server sizing.
+Lightweight Ubuntu resource monitoring for long-run server sizing, plus a local
+toolkit (`srmon`) for downloading logs and producing summaries, peaks, plots, and
+**one-command monthly per-host reports**.
 
-## Contents
+## Two roles
 
-- `scripts/resource_monitor.py`: CPU, memory, swap, disk, network, GPU, and top hot-thread sampler
-- `scripts/install-system-resource-monitor.sh`: systemd installer for Ubuntu
-- `scripts/uninstall-system-resource-monitor.sh`: systemd uninstaller with optional purge
-- `scripts/summarize_resource_monitor.py`: percentile-based log summarizer
-- `scripts/log_analysis_utils.py`: shared log selection and parsing helper
-- `scripts/download_server_logs.py`: SSH downloader for server logs into `local-debug-logs/`
-- `docs/system-resource-monitor.md`: install and operating notes
+- **On each server** — a `systemd` service samples CPU, memory, swap, disk,
+  network, and GPU every 10 seconds into `/var/log/system-resource-monitor/`.
+  Standard library only; no `pip`, no third-party packages.
+- **On your workstation** — the `srmon` command downloads those logs and turns
+  them into summaries, peak lists, time-series plots, CSVs, and monthly reports.
 
-## Quick Start
+## Repository layout
+
+- `src/srmon/` — the Python package
+  - `collect/` the on-host sampler · `ingest/` SSH download · `core/` shared log
+    selection/parsing/formatting · `analysis/` summary, peaks, window ·
+    `export/` CSV · `plotting/` matplotlib · `report/` the monthly report ·
+    `cli/` the `srmon` entry point
+- `scripts/` — the systemd installer and uninstaller
+  (`install-system-resource-monitor.sh`, `uninstall-system-resource-monitor.sh`)
+- `docs/system-resource-monitor.md` — full operating manual
+- `hosts.example.toml` — copy to `hosts.toml` for the monthly report inventory
+
+## Install on a server
 
 ```bash
-git clone <your-remote-url>
-cd system-resource-monitor
 sudo sh scripts/install-system-resource-monitor.sh
 ```
 
-## On the Server
+This installs the collector to `/usr/local/bin/system-resource-monitor`, the
+`srmon` package to `/usr/local/lib/system-resource-monitor/`, a
+`system-resource-monitor-summary` wrapper, `/etc/default/system-resource-monitor`,
+and the `system-resource-monitor.service` unit, then starts logging. The runtime
+uses only the Python standard library.
 
-Check service state:
+On the server:
 
 ```bash
 systemctl status system-resource-monitor.service --no-pager
-```
-
-Tail today's raw samples:
-
-```bash
 tail -n 5 /var/log/system-resource-monitor/metrics-$(date +%F).jsonl
-```
-
-Run a percentile summary of the most recent 30 recorded days:
-
-```bash
 system-resource-monitor-summary
 ```
 
-## On Your Local Machine
+## Set up the workstation toolkit (Python ≥ 3.11)
 
-Download all logs from a server:
+Recommended — install `srmon` as a global tool so it is on your `PATH` everywhere,
+with no virtualenv to activate (and it tracks your local code via `--editable`):
 
 ```bash
-python3 scripts/download_server_logs.py host@x.x.x.x
+uv tool install --editable . --with matplotlib
 ```
 
-The downloader detects the remote hostname and writes a combined file to `local-debug-logs/`, named like `server-a_2026-04-20_to_2026-04-30.jsonl`. If a file for that hostname already exists, new rows are merged in and duplicates are skipped.
+`srmon` then lives in `~/.local/bin/srmon`. Upgrade with `uv tool upgrade srmon`,
+remove with `uv tool uninstall srmon`. (Ensure `~/.local/bin` is on your `PATH`.)
 
-Summarize downloaded logs:
+Alternatives:
+
+- `pipx install -e ".[report]"` — same idea, isolated global CLI.
+- A virtualenv, **without activating it** — call the binary directly:
+  `python3 -m venv .venv && .venv/bin/pip install -e ".[report]"`, then run
+  `.venv/bin/srmon ...`, or `uv run srmon ...` from the project directory.
+
+## Monthly report — the one command
+
+Copy `hosts.example.toml` to `hosts.toml` and list your servers. A `hosts.toml`
+in the current directory or the repo root is picked up automatically, so the
+everyday command is just:
 
 ```bash
-python3 scripts/summarize_resource_monitor.py --hostname server-a
+srmon report --month 2026-05      # all hosts in hosts.toml; omit --month for the current month
 ```
 
-Find the highest CPU, memory, swap, and process-RSS samples:
+Point at a different inventory with `--inventory PATH`, or run a single host
+directly without any inventory:
 
 ```bash
-python3 scripts/find_peak_samples.py --mode local --hostname server-a
+srmon report --inventory other-hosts.toml --month 2026-05
+srmon report robotruck@100.64.0.6 --month 2026-05
 ```
 
-Inspect a time window around an incident timestamp:
+For each host this **downloads** the logs, **plots** CPU/memory/swap, computes the
+**peaks**, builds the **summary**, and bundles everything into:
 
-```bash
-python3 scripts/inspect_log_window.py --mode local --hostname server-a --timestamp 2026-04-20T01:45:24Z
+```text
+reports/<host>/<YYYY-MM>/
+  report.md          # open this: the plot is embedded, with peaks and summary below
+  cpu-mem-swap.png
+  summary.txt        # raw summary (grep / pbcopy)
+  peaks.txt
+  spreadsheet.tsv    # one-column values for Excel / Google Sheets
+  manifest.json      # what data the report was built from
 ```
 
-Export samples to CSV for plotting:
+Behavior:
+
+- Defaults to the **current** month; pass `--month YYYY-MM` for a finished month.
+- **Incremental**: a host with no in-month data is skipped (no empty report), and a
+  host already reported with no new data is skipped. Pass `--force` to regenerate
+  anyway, or `--skip-download` to reuse already-downloaded logs without SSH.
+- **Coverage is factual.** Hosts that don't record every day simply show fewer
+  "days with data" in the report header — that is expected, not an error.
+- With more than one host, a `reports/index-<YYYY-MM>.md` roll-up links them all.
+
+## Individual commands
 
 ```bash
-python3 scripts/export_metrics_csv.py --mode local --hostname server-a --start-date 2026-04-20 --end-date 2026-04-30
+srmon download user@host                 # SSH-pull logs into local-debug-logs/
+srmon summary  --hostname H002           # p50/p95/p99/max + spreadsheet values
+srmon peaks    --hostname H002           # top CPU / memory / swap / process-RSS samples
+srmon plot     --hostname H002           # 3-panel CPU/MEM/Swap PNG
+srmon export   --hostname H002           # 18-column CSV
+srmon window   --hostname H002 --timestamp 2026-05-09T01:45:24Z
 ```
 
-`export_metrics_csv.py` writes to `local-debug-logs/resource-monitor_<host>_<start>_to_<end>.csv` by default. Use `--output /path/to/file.csv` for a custom path, or `--output -` for stdout.
+Shared selection flags for the analysis commands: `--mode {auto,server,local}`
+(default `auto`: server logs when present, else `local-debug-logs/`), `--hostname`,
+`--start-date` / `--end-date`, `--days`, `--log-dir`.
 
-### Filtering options
-
-All analysis scripts default to `--mode auto` and the most recent 30 recorded days.
-
-- `--mode auto` uses server logs from `/var/log/system-resource-monitor` when present, otherwise falls back to the newest combined file in `local-debug-logs/`
-- `--mode server` reads `/var/log/system-resource-monitor` directly and uses `--days`
-- `--mode local` reads combined files in `local-debug-logs/`
-
-In local mode, `--hostname`, `--start-date`, and `--end-date` are optional filters; when omitted, the newest combined file is used. `--days 30` means the most recent 30 log days that actually have records, not necessarily the last 30 calendar dates.
-
-### Spreadsheet export
-
-Print only the values column for pasting into Excel or Google Sheets:
+Spreadsheet paste on macOS:
 
 ```bash
-python3 scripts/summarize_resource_monitor.py --hostname server-a --spreadsheet-values-only
-```
-
-On macOS, copy directly to the clipboard:
-
-```bash
-python3 scripts/summarize_resource_monitor.py --hostname server-a --spreadsheet-values-only | pbcopy
-```
-
-## Install Details
-
-The installer will:
-
-- install `system-resource-monitor` to `/usr/local/bin/system-resource-monitor`
-- install `system-resource-monitor-summary` to `/usr/local/bin/system-resource-monitor-summary`
-- install `log_analysis_utils.py` to `/usr/local/bin/log_analysis_utils.py` for the summary helper
-- create `/etc/default/system-resource-monitor`
-- create and enable `system-resource-monitor.service`
-- start the service immediately and again on future boots
-
-Default config written at install time:
-
-```bash
-INTERVAL_SECONDS=10
-TOP_N=5
-RETAIN_DAYS=30
-LOG_DIR=/var/log/system-resource-monitor
-```
-
-To remove the service and binaries while keeping logs and config:
-
-```bash
-sudo sh scripts/uninstall-system-resource-monitor.sh
-```
-
-To fully roll back including logs and config:
-
-```bash
-sudo sh scripts/uninstall-system-resource-monitor.sh --purge
+srmon summary --hostname H002 --spreadsheet-values-only | pbcopy
 ```
 
 ## What It Monitors
@@ -153,112 +146,37 @@ Important interpretation notes:
 
 ## Data Storage
 
-Logs are written as newline-delimited JSON under:
+Logs are written as newline-delimited JSON under `/var/log/system-resource-monitor`:
 
-```bash
-/var/log/system-resource-monitor
-```
-
-File layout:
-
-- one file per UTC day
-- filename format: `metrics-YYYY-MM-DD.jsonl`
+- one file per UTC day, named `metrics-YYYY-MM-DD.jsonl`
 - one JSON object per line
 - old daily log files are pruned according to `RETAIN_DAYS`
 
-## Log Shape
+Downloaded logs are merged per host into `local-debug-logs/<hostname>_<start>_to_<end>.jsonl`
+(both `local-debug-logs/` and `reports/` are gitignored).
 
-Each line in `metrics-YYYY-MM-DD.jsonl` looks like:
+## Install Details
 
-```json
-{
-  "schema_version": 2,
-  "timestamp": "2026-04-16T01:23:45Z",
-  "hostname": "server-a",
-  "boot_id": "0c74c0e8-4f7d-4be4-8f30-aaaaaaaaaaaa",
-  "sample_interval_seconds": 10.0,
-  "cpu": {
-    "logical_cpu_count": 32,
-    "used_pct": 61.7,
-    "loadavg_1m": 18.2,
-    "loadavg_5m": 15.4,
-    "loadavg_15m": 12.8
-  },
-  "memory": {
-    "mem_total_bytes": 270582939648,
-    "mem_available_bytes": 88267988992,
-    "mem_used_bytes": 182314950656,
-    "mem_used_pct": 67.38,
-    "swap_total_bytes": 34359734272,
-    "swap_used_bytes": 0,
-    "swap_used_pct": 0.0
-  },
-  "disk": {
-    "device_count": 3,
-    "read_bytes": 1234567890,
-    "write_bytes": 987654321,
-    "read_bytes_per_sec": 1048576.0,
-    "write_bytes_per_sec": 524288.0
-  },
-  "network": {
-    "interface_count": 2,
-    "rx_bytes": 7777777,
-    "tx_bytes": 3333333,
-    "rx_bytes_per_sec": 262144.0,
-    "tx_bytes_per_sec": 131072.0
-  },
-  "top_cpu_threads": [
-    {
-      "pid": 1821,
-      "tid": 1830,
-      "process_name": "python3",
-      "thread_name": "DataLoader",
-      "state": "R",
-      "cpu_pct": 92.4,
-      "cpu_time_seconds": 9.24,
-      "process_rss_bytes": 6249807872,
-      "interval_seconds": 10.0
-    }
-  ],
-  "top_memory_processes": [
-    {
-      "pid": 1821,
-      "process_name": "python3",
-      "rss_bytes": 6249807872
-    }
-  ],
-  "gpu": {
-    "backend": "nvidia",
-    "detected": true,
-    "devices": [
-      {
-        "index": 0,
-        "uuid": "GPU-xxxxxxxx",
-        "name": "NVIDIA GeForce RTX 3090",
-        "utilization_gpu_pct": 73.0,
-        "utilization_memory_pct": 41.0,
-        "memory_total_mib": 24268.0,
-        "memory_used_mib": 4096.0,
-        "memory_used_pct": 16.88,
-        "temperature_c": 61.0,
-        "power_draw_w": 248.0
-      }
-    ],
-    "processes": [
-      {
-        "pid": 1821,
-        "process_name": "python3",
-        "gpu_uuid": "GPU-xxxxxxxx",
-        "used_gpu_memory_mib": 4096.0
-      }
-    ]
-  }
-}
+The installer writes this default config to `/etc/default/system-resource-monitor`:
+
+```bash
+INTERVAL_SECONDS=10
+TOP_N=5
+RETAIN_DAYS=30
+LOG_DIR=/var/log/system-resource-monitor
 ```
+
+To remove the service and binaries while keeping logs and config:
+
+```bash
+sudo sh scripts/uninstall-system-resource-monitor.sh
+```
+
+Add `--purge` to also remove the config and logs.
 
 ## Notes
 
-- Designed for Ubuntu/Linux with `systemd`
-- Uses `/proc` and `nvidia-smi`; no Python third-party dependencies
-- Tracks top CPU threads, top memory processes, plus aggregate disk and network throughput
-- Full operating notes are in `docs/system-resource-monitor.md`
+- Designed for Ubuntu/Linux with `systemd`. The collector and the summary path use only `/proc`, `nvidia-smi`, and the Python standard library.
+- matplotlib is required **only** on the workstation, and **only** for `srmon plot` and `srmon report`; it is imported lazily, so `srmon summary` and the on-server summary never need it.
+- Full operating notes are in `docs/system-resource-monitor.md`.
+```

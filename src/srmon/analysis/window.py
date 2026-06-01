@@ -1,17 +1,13 @@
-#!/usr/bin/env python3
+"""Inspect samples in a time window around a specific timestamp."""
 
 import argparse
-from datetime import timedelta
-from typing import Dict, List
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence
 
-from log_analysis_utils import (
-    add_log_selection_args,
-    format_gib_from_bytes,
-    format_mib_per_sec_from_bytes,
-    iter_samples,
-    parse_iso_timestamp,
-    resolve_log_files,
-)
+from srmon.core.format import format_gib_from_bytes, format_mib_per_sec_from_bytes
+from srmon.core.samples import iter_samples, parse_iso_timestamp
+from srmon.core.selection import add_log_selection_args, resolve_log_files
 
 
 def summarize_top_memory(sample: Dict[str, object], limit: int) -> List[str]:
@@ -44,41 +40,12 @@ def summarize_top_threads(sample: Dict[str, object], limit: int) -> List[str]:
     return items
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Inspect a time window around a specific resource-monitor timestamp.")
-    add_log_selection_args(parser)
-    parser.add_argument(
-        "--timestamp",
-        required=True,
-        help="Center timestamp in ISO format, for example 2026-04-20T01:45:24Z.",
-    )
-    parser.add_argument("--minutes-before", type=int, default=15, help="Minutes to include before the timestamp.")
-    parser.add_argument("--minutes-after", type=int, default=15, help="Minutes to include after the timestamp.")
-    parser.add_argument(
-        "--top-limit",
-        type=int,
-        default=3,
-        help="Number of top memory processes and CPU threads to show per sample. Default: 3",
-    )
-    return parser.parse_args()
-
-
-def main() -> int:
-    args = parse_args()
-    if args.minutes_before < 0 or args.minutes_after < 0:
-        raise SystemExit("--minutes-before and --minutes-after must be 0 or greater")
-    if args.top_limit <= 0:
-        raise SystemExit("--top-limit must be greater than 0")
-
-    target = parse_iso_timestamp(args.timestamp)
-    window_start = target - timedelta(minutes=args.minutes_before)
-    window_end = target + timedelta(minutes=args.minutes_after)
-
-    log_dir, log_files = resolve_log_files(args)
-    if not log_files:
-        print(f"No log files found in {log_dir}")
-        return 0
-
+def collect_window_matches(
+    log_files: Iterable[Path],
+    window_start: datetime,
+    window_end: datetime,
+    top_limit: int,
+) -> List[str]:
     matches: List[str] = []
     for _, _, sample in iter_samples(log_files):
         timestamp_raw = sample.get("timestamp")
@@ -124,14 +91,50 @@ def main() -> int:
                 if device_summaries:
                     lines.append("  " + " | ".join(device_summaries))
 
-        top_memory = summarize_top_memory(sample, args.top_limit)
+        top_memory = summarize_top_memory(sample, top_limit)
         if top_memory:
             lines.append("  top_memory: " + " | ".join(top_memory))
-        top_threads = summarize_top_threads(sample, args.top_limit)
+        top_threads = summarize_top_threads(sample, top_limit)
         if top_threads:
             lines.append("  top_threads: " + " | ".join(top_threads))
 
         matches.append("\n".join(lines))
+    return matches
+
+
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    add_log_selection_args(parser)
+    parser.add_argument(
+        "--timestamp",
+        required=True,
+        help="Center timestamp in ISO format, for example 2026-04-20T01:45:24Z.",
+    )
+    parser.add_argument("--minutes-before", type=int, default=15, help="Minutes to include before the timestamp.")
+    parser.add_argument("--minutes-after", type=int, default=15, help="Minutes to include after the timestamp.")
+    parser.add_argument(
+        "--top-limit",
+        type=int,
+        default=3,
+        help="Number of top memory processes and CPU threads to show per sample. Default: 3",
+    )
+
+
+def run(args: argparse.Namespace) -> int:
+    if args.minutes_before < 0 or args.minutes_after < 0:
+        raise SystemExit("--minutes-before and --minutes-after must be 0 or greater")
+    if args.top_limit <= 0:
+        raise SystemExit("--top-limit must be greater than 0")
+
+    target = parse_iso_timestamp(args.timestamp)
+    window_start = target - timedelta(minutes=args.minutes_before)
+    window_end = target + timedelta(minutes=args.minutes_after)
+
+    log_dir, log_files = resolve_log_files(args)
+    if not log_files:
+        print(f"No log files found in {log_dir}")
+        return 0
+
+    matches = collect_window_matches(log_files, window_start, window_end, args.top_limit)
 
     print(f"Log directory: {log_dir}")
     print(f"Window: {window_start.isoformat()} -> {window_end.isoformat()}")
@@ -142,6 +145,12 @@ def main() -> int:
 
     print("\n\n".join(matches))
     return 0
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Inspect a time window around a specific resource-monitor timestamp.")
+    add_arguments(parser)
+    return run(parser.parse_args(argv))
 
 
 if __name__ == "__main__":

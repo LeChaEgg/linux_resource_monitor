@@ -1,12 +1,21 @@
-#!/usr/bin/env python3
+"""Percentile-based summary of resource-monitor JSONL logs.
+
+``build_report`` is the reusable entry point (also used by the monthly report).
+Formatters come from srmon.core.format; they are aliased to their historical
+names here so the summary text and spreadsheet values stay byte-for-byte stable.
+"""
 
 import argparse
 from collections import defaultdict
 from json import JSONDecodeError
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Sequence
 
-from log_analysis_utils import add_log_selection_args, iter_samples, resolve_log_files
+from srmon.core.format import format_pct
+from srmon.core.format import format_gib_from_bytes as format_gib
+from srmon.core.format import format_mib_per_sec_from_bytes as format_mib_per_sec
+from srmon.core.samples import iter_samples
+from srmon.core.selection import add_log_selection_args, resolve_log_files
 
 
 SPREADSHEET_ROW_SEPARATOR = "\r\n"
@@ -24,24 +33,6 @@ def percentile(values: List[float], pct: float) -> Optional[float]:
     upper = min(lower + 1, len(ranked) - 1)
     weight = position - lower
     return ranked[lower] * (1 - weight) + ranked[upper] * weight
-
-
-def format_pct(value: Optional[float]) -> str:
-    if value is None:
-        return "n/a"
-    return f"{value:.2f}%"
-
-
-def format_gib(value: Optional[float]) -> str:
-    if value is None:
-        return "n/a"
-    return f"{value / (1024 ** 3):.2f} GiB"
-
-
-def format_mib_per_sec(value: Optional[float]) -> str:
-    if value is None:
-        return "n/a"
-    return f"{value / (1024 ** 2):.2f} MiB/s"
 
 
 def parse_gpu_index(device: Dict[str, object]) -> Optional[int]:
@@ -317,22 +308,25 @@ def build_report(log_files: Iterable[Path], spreadsheet_values_only: bool = Fals
     return "\n".join(lines)
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Summarize system resource monitor JSONL logs.")
+def add_arguments(parser: argparse.ArgumentParser) -> None:
     add_log_selection_args(parser)
     parser.add_argument(
         "--spreadsheet-values-only",
         action="store_true",
         help="Print only the one-column spreadsheet value list, without the full summary.",
     )
-    return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
+def run(args: argparse.Namespace) -> int:
     _, log_files = resolve_log_files(args)
     print(build_report(log_files, spreadsheet_values_only=args.spreadsheet_values_only))
     return 0
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Summarize system resource monitor JSONL logs.")
+    add_arguments(parser)
+    return run(parser.parse_args(argv))
 
 
 if __name__ == "__main__":

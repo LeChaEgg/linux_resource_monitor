@@ -1,20 +1,18 @@
 import argparse
-import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "log_analysis_utils.py"
-SPEC = importlib.util.spec_from_file_location("log_analysis_utils", MODULE_PATH)
-MODULE = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-SPEC.loader.exec_module(MODULE)
+from srmon.core.samples import iter_samples  # noqa: E402
+from srmon.core.selection import add_log_selection_args, resolve_log_dir, resolve_log_files  # noqa: E402
 
 
-class LogAnalysisUtilsTests(unittest.TestCase):
+class LogSelectionTests(unittest.TestCase):
     def test_resolve_log_dir_uses_local_debug_dir_by_mode(self) -> None:
-        resolved = MODULE.resolve_log_dir(None, "local")
+        resolved = resolve_log_dir(None, "local")
         expected = Path(__file__).resolve().parents[1] / "local-debug-logs"
         self.assertEqual(resolved, expected)
 
@@ -25,7 +23,7 @@ class LogAnalysisUtilsTests(unittest.TestCase):
                 (log_dir / f"metrics-{day}.jsonl").write_text("{}\n", encoding="utf-8")
 
             args = argparse.Namespace(mode="server", log_dir=str(log_dir), days=2)
-            _, files = MODULE.resolve_log_files(args)
+            _, files = resolve_log_files(args)
 
         self.assertEqual(
             [path.name for path in files],
@@ -34,7 +32,7 @@ class LogAnalysisUtilsTests(unittest.TestCase):
 
     def test_add_log_selection_args_defaults_to_auto_and_30_days(self) -> None:
         parser = argparse.ArgumentParser()
-        MODULE.add_log_selection_args(parser)
+        add_log_selection_args(parser)
         args = parser.parse_args([])
 
         self.assertEqual(args.mode, "auto")
@@ -45,7 +43,7 @@ class LogAnalysisUtilsTests(unittest.TestCase):
             path = Path(tmpdir) / "metrics-2026-04-20.jsonl"
             path.write_text('{"timestamp":"2026-04-20T00:00:00Z"}\n{"timestamp" 1}\n', encoding="utf-8")
 
-            rows = list(MODULE.iter_samples([path]))
+            rows = list(iter_samples([path]))
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0][2]["timestamp"], "2026-04-20T00:00:00Z")
@@ -76,8 +74,8 @@ class LogAnalysisUtilsTests(unittest.TestCase):
                 start_date="2026-04-12",
                 end_date="2026-04-12",
             )
-            _, files = MODULE.resolve_log_files(args)
-            rows = list(MODULE.iter_samples(files))
+            _, files = resolve_log_files(args)
+            rows = list(iter_samples(files))
 
         self.assertEqual([path.name for path in files], ["server-a_2026-04-10_to_2026-04-12.jsonl"])
         self.assertEqual([row[2]["timestamp"] for row in rows], ["2026-04-12T00:00:00Z"])
@@ -109,8 +107,8 @@ class LogAnalysisUtilsTests(unittest.TestCase):
                 start_date=None,
                 end_date=None,
             )
-            _, files = MODULE.resolve_log_files(args)
-            rows = list(MODULE.iter_samples(files))
+            _, files = resolve_log_files(args)
+            rows = list(iter_samples(files))
 
         self.assertEqual([path.name for path in files], ["server-b_2026-04-11_to_2026-04-13.jsonl"])
         self.assertEqual([row[2]["timestamp"] for row in rows], ["2026-04-12T00:00:00Z", "2026-04-13T00:00:00Z"])
@@ -131,8 +129,8 @@ class LogAnalysisUtilsTests(unittest.TestCase):
                 start_date=None,
                 end_date=None,
             )
-            _, files = MODULE.resolve_log_files(args)
-            rows = list(MODULE.iter_samples(files))
+            _, files = resolve_log_files(args)
+            rows = list(iter_samples(files))
 
         self.assertEqual([path.name for path in files], ["server-a_2026-04-12_to_2026-04-12.jsonl"])
         self.assertEqual(len(rows), 1)
@@ -153,7 +151,7 @@ class LogAnalysisUtilsTests(unittest.TestCase):
                 start_date="2026-04-12",
                 end_date="2026-04-12",
             )
-            _, files = MODULE.resolve_log_files(args)
+            _, files = resolve_log_files(args)
 
         self.assertEqual(files, [])
 
