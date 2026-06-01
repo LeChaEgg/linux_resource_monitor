@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "srmon"
+version = "0.1.0"
+description = "System resource monitor: on-host sampler plus local analysis, plotting, and monthly reports."
+readme = "README.md"
+requires-python = ">=3.11"
+# Runtime has no third-party dependencies. The on-host collector and the
+# summary/peaks/export/window paths use only the Python standard library.
+# matplotlib is only needed for plotting and the monthly report (see optional
+# extras below).
+dependencies = []
+
+[project.optional-dependencies]
+# Local analysis workstation: plotting and the monthly `report` command.
+report = ["matplotlib>=3.7"]
+plot = ["matplotlib>=3.7"]
+
+[project.scripts]
+srmon = "srmon.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

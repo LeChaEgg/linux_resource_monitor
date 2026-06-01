@@ -1,22 +1,29 @@
-#!/usr/bin/env python3
+"""Log directory / file selection across server and downloaded ("local") logs.
+
+The --mode default is "auto": it reads /var/log/system-resource-monitor when those
+server logs are present, otherwise the newest combined file in local-debug-logs/.
+This keeps the on-server summary working (it must find /var/log/...) while a
+workstation with no server logs transparently falls back to the downloaded copies.
+"""
 
 import argparse
-import json
-import re
-import sys
-from datetime import date, datetime, timedelta
-from json import JSONDecodeError
+from datetime import date
 from pathlib import Path
-from typing import Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
+
+from srmon.core.naming import (
+    combined_log_hostname,
+    parse_combined_log_file_date_range,
+    parse_log_file_date,
+)
+from srmon.core.samples import collect_sample_dates
+from srmon.core.timerange import date_range_set, ranges_overlap, select_recent_dates
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SERVER_LOG_DIR = Path("/var/log/system-resource-monitor")
 DEFAULT_DOWNLOADED_LOG_DIR = REPO_ROOT / "local-debug-logs"
 DEFAULT_LOG_DAYS = 30
-COMBINED_LOG_RE = re.compile(
-    r"^(?P<hostname>.+)_(?P<start>\d{4}-\d{2}-\d{2})_to_(?P<end>\d{4}-\d{2}-\d{2})\.jsonl$"
-)
 
 
 class LogFiles(list):
@@ -78,6 +85,8 @@ def resolve_log_dir(log_dir: Optional[str], mode: str) -> Path:
 
 
 def parse_date_arg(name: str, value: Optional[str]) -> date:
+    from datetime import datetime
+
     if not value:
         raise SystemExit(f"{name} is required in local mode")
     try:
@@ -99,83 +108,6 @@ def parse_optional_date_range(args: argparse.Namespace) -> Tuple[Optional[date],
     if end_date < start_date:
         raise SystemExit("--end-date must be on or after --start-date")
     return start_date, end_date
-
-
-def date_range_set(start_date: date, end_date: date) -> Set[date]:
-    days: Set[date] = set()
-    current = start_date
-    while current <= end_date:
-        days.add(current)
-        current += timedelta(days=1)
-    return days
-
-
-def parse_log_file_date(path: Path) -> Optional[date]:
-    suffix = path.stem.replace("metrics-", "", 1)
-    try:
-        return datetime.strptime(suffix, "%Y-%m-%d").date()
-    except ValueError:
-        return None
-
-
-def parse_combined_log_file_date_range(path: Path) -> Optional[Tuple[date, date]]:
-    match = COMBINED_LOG_RE.match(path.name)
-    if match is None:
-        return None
-    try:
-        start = datetime.strptime(match.group("start"), "%Y-%m-%d").date()
-        end = datetime.strptime(match.group("end"), "%Y-%m-%d").date()
-    except ValueError:
-        return None
-    if end < start:
-        return None
-    return start, end
-
-
-def combined_log_hostname(path: Path) -> Optional[str]:
-    match = COMBINED_LOG_RE.match(path.name)
-    if match is None:
-        return None
-    return match.group("hostname")
-
-
-def ranges_overlap(left_start: date, left_end: date, right_start: date, right_end: date) -> bool:
-    return left_start <= right_end and right_start <= left_end
-
-
-def parse_sample_timestamp_date(sample: Dict[str, object]) -> Optional[date]:
-    timestamp = sample.get("timestamp")
-    if not isinstance(timestamp, str):
-        return None
-    try:
-        return datetime.fromisoformat(timestamp.replace("Z", "+00:00")).date()
-    except ValueError:
-        return None
-
-
-def parse_sample_date_from_line(line: str, hostname: Optional[str]) -> Optional[date]:
-    try:
-        sample = json.loads(line)
-    except JSONDecodeError:
-        return None
-    if not isinstance(sample, dict):
-        return None
-    if hostname is not None and sample.get("hostname") != hostname:
-        return None
-    return parse_sample_timestamp_date(sample)
-
-
-def collect_sample_dates(path: Path, hostname: Optional[str]) -> Set[date]:
-    dates: Set[date] = set()
-    with path.open(encoding="utf-8") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
-                continue
-            sample_date = parse_sample_date_from_line(line, hostname)
-            if sample_date is not None:
-                dates.add(sample_date)
-    return dates
 
 
 def list_log_files(log_dir: Path, days: Optional[int]) -> List[Path]:
@@ -203,12 +135,6 @@ def list_log_files(log_dir: Path, days: Optional[int]) -> List[Path]:
     selected_items.sort()
     selected_dates_by_path = {path: date_filter for _, _, path, date_filter in selected_items}
     return LogFiles([path for _, _, path, _ in selected_items], selected_dates_by_path)
-
-
-def select_recent_dates(dates: Set[date], days: Optional[int]) -> Set[date]:
-    if days is None or days == 0:
-        return dates
-    return set(sorted(dates)[-days:])
 
 
 def list_local_log_files(
@@ -335,58 +261,3 @@ def resolve_log_files(args: argparse.Namespace) -> Tuple[Path, List[Path]]:
     if mode == "local":
         return resolve_local_log_files(args, log_dir, days)
     return resolve_server_log_files(log_dir, days)
-
-
-def warn_invalid_sample(path: Path, line_number: int, exc: JSONDecodeError) -> None:
-    sys.stderr.write(
-        f"Skipping invalid JSON sample in {path} line {line_number}: {exc.msg} at column {exc.colno}\n"
-    )
-
-
-def iter_samples(
-    log_files: Iterable[Path],
-    on_invalid: Optional[Callable[[Path, int, JSONDecodeError], None]] = None,
-) -> Iterator[Tuple[Path, int, Dict[str, object]]]:
-    selected_dates_by_path = getattr(log_files, "selected_dates_by_path", {})
-    hostname_filter = getattr(log_files, "hostname_filter", None)
-    for path in log_files:
-        selected_dates = selected_dates_by_path.get(path)
-        with path.open(encoding="utf-8") as handle:
-            for line_number, raw_line in enumerate(handle, start=1):
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    sample = json.loads(line)
-                except JSONDecodeError as exc:
-                    if on_invalid is not None:
-                        on_invalid(path, line_number, exc)
-                    warn_invalid_sample(path, line_number, exc)
-                    continue
-                if not isinstance(sample, dict):
-                    continue
-                if selected_dates is not None and parse_sample_timestamp_date(sample) not in selected_dates:
-                    continue
-                if hostname_filter is not None and sample.get("hostname") != hostname_filter:
-                    continue
-                yield path, line_number, sample
-
-
-def parse_iso_timestamp(value: str) -> datetime:
-    normalized = value.replace("Z", "+00:00")
-    parsed = datetime.fromisoformat(normalized)
-    if parsed.tzinfo is None:
-        raise ValueError("Timestamp must include timezone information, for example 2026-04-20T01:45:24Z")
-    return parsed
-
-
-def format_gib_from_bytes(value: Optional[float]) -> str:
-    if value is None:
-        return "n/a"
-    return f"{value / (1024 ** 3):.2f} GiB"
-
-
-def format_mib_per_sec_from_bytes(value: Optional[float]) -> str:
-    if value is None:
-        return "n/a"
-    return f"{value / (1024 ** 2):.2f} MiB/s"

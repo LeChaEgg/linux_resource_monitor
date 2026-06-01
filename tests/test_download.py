@@ -1,22 +1,17 @@
-import importlib.util
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "download_server_logs.py"
-SPEC = importlib.util.spec_from_file_location("download_server_logs", MODULE_PATH)
-MODULE = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-sys.modules[SPEC.name] = MODULE
-SPEC.loader.exec_module(MODULE)
+from srmon.ingest.download import merge_lines_into_host_log, sanitize_hostname  # noqa: E402
 
 
-class DownloadServerLogsTests(unittest.TestCase):
+class DownloadMergeTests(unittest.TestCase):
     def test_merge_creates_hostname_range_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = MODULE.merge_lines_into_host_log(
+            result = merge_lines_into_host_log(
                 hostname="server-a",
                 remote_lines=[
                     '{"timestamp":"2026-04-20T00:00:00Z","hostname":"server-a"}\n',
@@ -40,7 +35,7 @@ class DownloadServerLogsTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = MODULE.merge_lines_into_host_log(
+            result = merge_lines_into_host_log(
                 hostname="server-a",
                 remote_lines=[
                     '{"timestamp":"2026-04-20T00:00:00Z","hostname":"server-a"}\n',
@@ -58,7 +53,7 @@ class DownloadServerLogsTests(unittest.TestCase):
             self.assertEqual(result.path.read_text(encoding="utf-8").count("\n"), 2)
 
     def test_sanitize_hostname_replaces_unsafe_characters(self) -> None:
-        self.assertEqual(MODULE.sanitize_hostname(" server/name:01 "), "server_name_01")
+        self.assertEqual(sanitize_hostname(" server/name:01 "), "server_name_01")
 
 
 if __name__ == "__main__":

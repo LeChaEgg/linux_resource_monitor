@@ -1,5 +1,4 @@
 import contextlib
-import importlib.util
 import io
 import sys
 import tempfile
@@ -8,14 +7,12 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
-MODULE_PATH = SCRIPTS_DIR / "export_metrics_csv.py"
-sys.path.insert(0, str(SCRIPTS_DIR))
-SPEC = importlib.util.spec_from_file_location("export_metrics_csv", MODULE_PATH)
-MODULE = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-SPEC.loader.exec_module(MODULE)
+from srmon.export import csv_export as MODULE  # noqa: E402
+
+# Patching MODULE.DEFAULT_DOWNLOADED_LOG_DIR works because run()/default_output_path
+# look the name up as a module global of srmon.export.csv_export at call time.
 
 
 class ExportMetricsCsvTests(unittest.TestCase):
@@ -35,7 +32,7 @@ class ExportMetricsCsvTests(unittest.TestCase):
             )
 
             argv = [
-                "export_metrics_csv.py",
+                "srmon-export",
                 "--mode",
                 "local",
                 "--log-dir",

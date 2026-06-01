@@ -1,0 +1,19 @@
+# Copy this to hosts.toml and edit, then run:
+#   srmon report --inventory hosts.toml --month 2026-05
+# (or default to the current month by omitting --month).
+#
+# One report is generated per host under reports/<name>/<YYYY-MM>/. Hosts with no
+# new in-month data are skipped, and a host already reported with no new data is
+# skipped too.
+
+[[host]]
+ssh = "robotruck@100.64.0.6"
+name = "H002"                       # optional label; defaults to the detected hostname
+# identity_file = "~/.ssh/id_rsa"   # optional per-host SSH key
+# port = 22                          # optional SSH port
+# remote_log_dir = "/var/log/system-resource-monitor"  # optional, this is the default
+# ssh_options = ["ConnectTimeout=10"]                  # optional extra ssh -o options
+
+[[host]]
+ssh = "robotruck@100.64.0.7"
+name = "V001"

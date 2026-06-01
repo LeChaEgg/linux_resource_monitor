@@ -1,31 +1,27 @@
-#!/usr/bin/env python3
+"""Download all system-resource-monitor JSONL logs from a server over SSH and
+merge them into a per-host combined file under local-debug-logs/.
+
+The combined-log filename grammar and sample-date parsing are shared with the
+rest of the package via srmon.core (no local duplicates).
+"""
 
 import argparse
 import hashlib
-import json
-import re
 import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Set, Tuple
 
+from srmon.core.naming import build_combined_log_filename, parse_combined_log_name
+from srmon.core.samples import parse_sample_date_from_line
+from srmon.core.selection import DEFAULT_DOWNLOADED_LOG_DIR
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+
 DEFAULT_REMOTE_LOG_DIR = "/var/log/system-resource-monitor"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "local-debug-logs"
-COMBINED_LOG_RE = re.compile(
-    r"^(?P<hostname>.+)_(?P<start>\d{4}-\d{2}-\d{2})_to_(?P<end>\d{4}-\d{2}-\d{2})\.jsonl$"
-)
-
-
-@dataclass(frozen=True)
-class CombinedLogName:
-    hostname: str
-    start_date: date
-    end_date: date
+DEFAULT_OUTPUT_DIR = DEFAULT_DOWNLOADED_LOG_DIR
 
 
 @dataclass(frozen=True)
@@ -45,28 +41,12 @@ class RemoteCommandError(RuntimeError):
 
 
 def sanitize_hostname(hostname: str) -> str:
+    import re
+
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", hostname.strip()).strip("._-")
     if not cleaned:
         raise ValueError("Remote hostname is empty after sanitizing")
     return cleaned
-
-
-def parse_combined_log_name(path: Path) -> Optional[CombinedLogName]:
-    match = COMBINED_LOG_RE.match(path.name)
-    if match is None:
-        return None
-    try:
-        start = datetime.strptime(match.group("start"), "%Y-%m-%d").date()
-        end = datetime.strptime(match.group("end"), "%Y-%m-%d").date()
-    except ValueError:
-        return None
-    if end < start:
-        return None
-    return CombinedLogName(hostname=match.group("hostname"), start_date=start, end_date=end)
-
-
-def build_combined_log_filename(hostname: str, start_date: date, end_date: date) -> str:
-    return f"{hostname}_{start_date.isoformat()}_to_{end_date.isoformat()}.jsonl"
 
 
 def find_existing_host_logs(output_dir: Path, hostname: str) -> List[Path]:
@@ -90,19 +70,7 @@ def log_line_digest(line: str) -> str:
 
 
 def parse_sample_date(line: str) -> Optional[date]:
-    try:
-        sample = json.loads(line)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(sample, dict):
-        return None
-    timestamp = sample.get("timestamp")
-    if not isinstance(timestamp, str):
-        return None
-    try:
-        return datetime.fromisoformat(timestamp.replace("Z", "+00:00")).date()
-    except ValueError:
-        return None
+    return parse_sample_date_from_line(line, None)
 
 
 def extend_date_range(
@@ -195,15 +163,21 @@ def merge_lines_into_host_log(hostname: str, remote_lines: Iterable[str], output
     )
 
 
-def build_ssh_base_command(args: argparse.Namespace) -> List[str]:
+def build_ssh_base_command_from_options(
+    server: str,
+    *,
+    port: Optional[int] = None,
+    identity_file: Optional[str] = None,
+    ssh_options: Sequence[str] = (),
+) -> List[str]:
     command = ["ssh"]
-    if args.port is not None:
-        command.extend(["-p", str(args.port)])
-    if args.identity_file:
-        command.extend(["-i", str(Path(args.identity_file).expanduser())])
-    for option in args.ssh_option:
+    if port is not None:
+        command.extend(["-p", str(port)])
+    if identity_file:
+        command.extend(["-i", str(Path(identity_file).expanduser())])
+    for option in ssh_options:
         command.extend(["-o", option])
-    command.append(args.server)
+    command.append(server)
     return command
 
 
@@ -262,10 +236,29 @@ def stream_remote_log_lines(ssh_base_command: Sequence[str], remote_log_dir: str
             process.terminate()
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Download all system-resource-monitor JSONL logs from a server into local-debug-logs."
+def download_host_logs(
+    server: str,
+    *,
+    output_dir: Path,
+    remote_log_dir: str = DEFAULT_REMOTE_LOG_DIR,
+    hostname: Optional[str] = None,
+    port: Optional[int] = None,
+    identity_file: Optional[str] = None,
+    ssh_options: Sequence[str] = (),
+) -> MergeResult:
+    """Download + merge a host's logs. Reusable by the monthly report."""
+    ssh_base_command = build_ssh_base_command_from_options(
+        server, port=port, identity_file=identity_file, ssh_options=ssh_options
     )
+    resolved_hostname = hostname or read_remote_hostname(ssh_base_command)
+    return merge_lines_into_host_log(
+        hostname=resolved_hostname,
+        remote_lines=stream_remote_log_lines(ssh_base_command, remote_log_dir),
+        output_dir=Path(output_dir).expanduser(),
+    )
+
+
+def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("server", help="SSH target, for example robotruck@100.64.0.6")
     parser.add_argument(
         "--remote-log-dir",
@@ -286,19 +279,18 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Extra ssh -o option. Repeat for multiple options, for example --ssh-option ConnectTimeout=10.",
     )
-    return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
-    ssh_base_command = build_ssh_base_command(args)
-
+def run(args: argparse.Namespace) -> int:
     try:
-        hostname = args.hostname or read_remote_hostname(ssh_base_command)
-        result = merge_lines_into_host_log(
-            hostname=hostname,
-            remote_lines=stream_remote_log_lines(ssh_base_command, args.remote_log_dir),
+        result = download_host_logs(
+            args.server,
             output_dir=Path(args.output_dir).expanduser(),
+            remote_log_dir=args.remote_log_dir,
+            hostname=args.hostname,
+            port=args.port,
+            identity_file=args.identity_file,
+            ssh_options=args.ssh_option,
         )
     except (RemoteCommandError, OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -314,6 +306,14 @@ def main() -> int:
     if result.existing_rows:
         print(f"Existing rows kept: {result.existing_rows}")
     return 0
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Download all system-resource-monitor JSONL logs from a server into local-debug-logs."
+    )
+    add_arguments(parser)
+    return run(parser.parse_args(argv))
 
 
 if __name__ == "__main__":

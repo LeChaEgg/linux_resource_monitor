@@ -4,3 +4,11 @@ __pycache__/
 *.log
 .DS_Store
 local-debug-logs/
+reports/
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+# Your real inventory may contain internal hostnames/IPs; keep it local.
+hosts.toml

@@ -8,7 +8,7 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 SERVICE_NAME="system-resource-monitor.service"
 BIN_PATH="/usr/local/bin/system-resource-monitor"
 SUMMARY_BIN_PATH="/usr/local/bin/system-resource-monitor-summary"
-LOG_UTILS_PATH="/usr/local/bin/log_analysis_utils.py"
+LIB_DIR="/usr/local/lib/system-resource-monitor"
 ENV_PATH="/etc/default/system-resource-monitor"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 DEFAULT_LOG_DIR="/var/log/system-resource-monitor"
@@ -34,9 +34,23 @@ need_cmd python3
 need_cmd install
 need_cmd systemctl
 
-install -m 0755 "${REPO_ROOT}/scripts/resource_monitor.py" "$BIN_PATH"
-install -m 0644 "${REPO_ROOT}/scripts/log_analysis_utils.py" "$LOG_UTILS_PATH"
-install -m 0755 "${REPO_ROOT}/scripts/summarize_resource_monitor.py" "$SUMMARY_BIN_PATH"
+# Collector: a self-contained, stdlib-only file run directly by systemd.
+install -m 0755 "${REPO_ROOT}/src/srmon/collect/monitor.py" "$BIN_PATH"
+
+# srmon package, used by the summary command. Pure standard library at runtime;
+# matplotlib is only needed for plotting/report on a workstation and is never
+# imported on this path.
+rm -rf "${LIB_DIR}/srmon"
+mkdir -p "$LIB_DIR"
+cp -R "${REPO_ROOT}/src/srmon" "${LIB_DIR}/srmon"
+
+# Summary wrapper -> `python3 -m srmon.analysis.summary` with the package on PYTHONPATH.
+cat > "$SUMMARY_BIN_PATH" <<EOF
+#!/bin/sh
+exec env PYTHONPATH="$LIB_DIR" python3 -m srmon.analysis.summary "\$@"
+EOF
+chmod 0755 "$SUMMARY_BIN_PATH"
+
 install -d -m 0755 "$DEFAULT_LOG_DIR"
 
 if [ ! -f "$ENV_PATH" ]; then
@@ -76,7 +90,7 @@ systemctl enable --now "$SERVICE_NAME"
 echo "Installed ${SERVICE_NAME}"
 echo "Binary: $BIN_PATH"
 echo "Summary: $SUMMARY_BIN_PATH"
-echo "Summary helper: $LOG_UTILS_PATH"
+echo "Package: ${LIB_DIR}/srmon"
 echo "Config: $ENV_PATH"
 echo "Logs: $DEFAULT_LOG_DIR"
 echo "Service status: systemctl status ${SERVICE_NAME} --no-pager"
