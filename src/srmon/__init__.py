@@ -2,7 +2,7 @@
 
 Subpackages:
 - ``collect``  : the on-host sampler (stdlib-only; installed flat as a service).
-- ``ingest``   : SSH download/merge of server logs into local-debug-logs/.
+- ``ingest``   : SSH download/merge of server logs into data/.
 - ``core``     : shared log selection, parsing, formatting, and time-range helpers.
 - ``analysis`` : summary, peak, and window analysis over JSONL samples.
 - ``export``   : CSV export.

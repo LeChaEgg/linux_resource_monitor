@@ -107,7 +107,7 @@ Behavior:
 ## Individual commands
 
 ```bash
-srmon download user@host                 # SSH-pull logs into local-debug-logs/
+srmon download user@host                 # SSH-pull logs into data/
 srmon summary  --hostname H002           # p50/p95/p99/max + spreadsheet values
 srmon peaks    --hostname H002           # top CPU / memory / swap / process-RSS samples
 srmon plot     --hostname H002           # 3-panel CPU/MEM/Swap PNG
@@ -116,7 +116,7 @@ srmon window   --hostname H002 --timestamp 2026-05-09T01:45:24Z
 ```
 
 Shared selection flags for the analysis commands: `--mode {auto,server,local}`
-(default `auto`: server logs when present, else `local-debug-logs/`), `--hostname`,
+(default `auto`: server logs when present, else `data/`), `--hostname`,
 `--start-date` / `--end-date`, `--days`, `--log-dir`.
 
 Spreadsheet paste on macOS:
@@ -152,8 +152,8 @@ Logs are written as newline-delimited JSON under `/var/log/system-resource-monit
 - one JSON object per line
 - old daily log files are pruned according to `RETAIN_DAYS`
 
-Downloaded logs are merged per host into `local-debug-logs/<hostname>_<start>_to_<end>.jsonl`
-(both `local-debug-logs/` and `reports/` are gitignored).
+Downloaded logs are merged per host into `data/<hostname>_<start>_to_<end>.jsonl`
+(both `data/` and `reports/` are gitignored).
 
 ## Install Details
 

@@ -13,7 +13,7 @@ from srmon.core.selection import add_log_selection_args, resolve_log_dir, resolv
 class LogSelectionTests(unittest.TestCase):
     def test_resolve_log_dir_uses_local_debug_dir_by_mode(self) -> None:
         resolved = resolve_log_dir(None, "local")
-        expected = Path(__file__).resolve().parents[1] / "local-debug-logs"
+        expected = Path(__file__).resolve().parents[1] / "data"
         self.assertEqual(resolved, expected)
 
     def test_resolve_log_files_uses_recent_recorded_days(self) -> None:

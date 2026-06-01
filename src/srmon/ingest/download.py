@@ -1,12 +1,17 @@
-"""Download all system-resource-monitor JSONL logs from a server over SSH and
-merge them into a per-host combined file under local-debug-logs/.
+"""Download system-resource-monitor JSONL logs from a server over SSH and keep a
+per-host combined file under data/ up to date.
 
-The combined-log filename grammar and sample-date parsing are shared with the
-rest of the package via srmon.core (no local duplicates).
+The local file is the persistent store. Each run fetches only the *delta* since
+the latest sample already stored (the remote command only `cat`s daily files on
+or after the local cutoff date) and APPENDS the new, deduplicated lines in place —
+the existing body is never re-downloaded or rewritten. The per-host filename keeps
+its `<host>_<start>_to_<end>.jsonl` form; only the `_to_<end>` is bumped (a cheap
+rename) when newly appended data extends the range.
 """
 
 import argparse
 import hashlib
+import os
 import shlex
 import subprocess
 import sys
@@ -30,7 +35,7 @@ class MergeResult:
     hostname: str
     start_date: date
     end_date: date
-    existing_rows: int
+    existing_rows: int  # boundary-day rows compared for dedup (0 on a first/full write)
     downloaded_rows: int
     appended_rows: int
     duplicate_rows: int
@@ -87,19 +92,100 @@ def extend_date_range(
     return start_date, end_date
 
 
-def merge_lines_into_host_log(hostname: str, remote_lines: Iterable[str], output_dir: Path) -> MergeResult:
-    safe_hostname = sanitize_hostname(hostname)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    existing_paths = find_existing_host_logs(output_dir, safe_hostname)
-    temp_path = output_dir / f".{safe_hostname}.download.tmp"
+# --- tail helpers (read only the end of a possibly huge file) ---------------
 
+
+def _iter_lines_backward(path: Path, block_size: int = 65536) -> Iterable[str]:
+    """Yield decoded lines from EOF toward BOF (may include empty strings)."""
+    with path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        remaining = handle.tell()
+        tail = b""
+        while remaining > 0:
+            read_size = min(block_size, remaining)
+            remaining -= read_size
+            handle.seek(remaining)
+            data = handle.read(read_size) + tail
+            parts = data.split(b"\n")
+            tail = parts[0]
+            for part in reversed(parts[1:]):
+                yield part.decode("utf-8", "replace")
+        yield tail.decode("utf-8", "replace")
+
+
+def read_local_cutoff_date(path: Path) -> Optional[date]:
+    """UTC date of the latest stored sample (last complete line), or None."""
+    if not path.exists() or path.stat().st_size == 0:
+        return None
+    for raw in _iter_lines_backward(path):
+        line = raw.strip()
+        if not line:
+            continue
+        return parse_sample_date(line)
+    return None
+
+
+def collect_cutoff_day_hashes(path: Path, cutoff_date: Optional[date]) -> Set[str]:
+    """sha256 of local lines whose date == cutoff_date, scanning backward from EOF
+    until the date rolls earlier. Bounded to ~one day, not the whole file."""
+    hashes: Set[str] = set()
+    if cutoff_date is None or not path.exists():
+        return hashes
+    for raw in _iter_lines_backward(path):
+        line = raw.strip()
+        if not line:
+            continue
+        sample_date = parse_sample_date(line)
+        if sample_date is None:
+            continue
+        if sample_date == cutoff_date:
+            normalized = normalize_log_line(line)
+            if normalized is not None:
+                hashes.add(log_line_digest(normalized))
+        elif sample_date < cutoff_date:
+            break
+    return hashes
+
+
+def repair_partial_tail(path: Path) -> None:
+    """Drop a half-written final line left by an interrupted append (no trailing
+    newline). O(1)-ish: truncate back to the last newline; no full rewrite."""
+    if not path.exists():
+        return
+    size = path.stat().st_size
+    if size == 0:
+        return
+    with path.open("rb+") as handle:
+        handle.seek(-1, os.SEEK_END)
+        if handle.read(1) == b"\n":
+            return
+        remaining = size
+        last_newline = -1
+        while remaining > 0:
+            read_size = min(65536, remaining)
+            remaining -= read_size
+            handle.seek(remaining)
+            data = handle.read(read_size)
+            idx = data.rfind(b"\n")
+            if idx != -1:
+                last_newline = remaining + idx
+                break
+        handle.truncate(last_newline + 1 if last_newline != -1 else 0)
+
+
+# --- merge / append ---------------------------------------------------------
+
+
+def _full_write(
+    safe_hostname: str, remote_lines: Iterable[str], output_dir: Path, existing_paths: List[Path]
+) -> MergeResult:
+    """First download (no existing file) or consolidation (>1 existing): write a
+    fresh file from existing + remote, deduped, named by the min/max date seen."""
+    temp_path = output_dir / f".{safe_hostname}.download.tmp"
     seen_hashes: Set[str] = set()
     start_date: Optional[date] = None
     end_date: Optional[date] = None
-    existing_rows = 0
-    downloaded_rows = 0
-    appended_rows = 0
-    duplicate_rows = 0
+    existing_rows = downloaded_rows = appended_rows = duplicate_rows = 0
 
     try:
         with temp_path.open("w", encoding="utf-8") as output:
@@ -163,6 +249,90 @@ def merge_lines_into_host_log(hostname: str, remote_lines: Iterable[str], output
     )
 
 
+def _incremental_append(
+    safe_hostname: str, remote_lines: Iterable[str], output_dir: Path, existing_path: Path
+) -> MergeResult:
+    """Append only new lines to the existing per-host file in place; bump the
+    filename's end-date if the range grew. Never reads/rewrites the existing body."""
+    parsed = parse_combined_log_name(existing_path)
+    repair_partial_tail(existing_path)
+    cutoff = read_local_cutoff_date(existing_path)
+    boundary = collect_cutoff_day_hashes(existing_path, cutoff)
+
+    downloaded_rows = appended_rows = duplicate_rows = 0
+    min_new: Optional[date] = None
+    max_new: Optional[date] = None
+    saw_cutoff_day = False
+
+    with existing_path.open("a", encoding="utf-8") as output:
+        for raw_line in remote_lines:
+            line = normalize_log_line(raw_line)
+            if line is None:
+                continue
+            downloaded_rows += 1
+            sample_date = parse_sample_date(line)
+            if cutoff is not None and sample_date is not None:
+                if sample_date < cutoff:
+                    continue  # already stored (older than our tail)
+                if sample_date == cutoff:
+                    saw_cutoff_day = True
+                    if log_line_digest(line) in boundary:
+                        duplicate_rows += 1
+                        continue
+            output.write(line)
+            appended_rows += 1
+            min_new, max_new = extend_date_range(min_new, max_new, sample_date)
+        output.flush()
+        os.fsync(output.fileno())
+
+    start_date = parsed.start_date if parsed is not None else (min_new or cutoff)
+    end_date = parsed.end_date if parsed is not None else (max_new or cutoff)
+    if max_new is not None and (end_date is None or max_new > end_date):
+        end_date = max_new
+
+    final_path = existing_path
+    if parsed is not None and end_date is not None and end_date != parsed.end_date:
+        final_path = output_dir / build_combined_log_filename(safe_hostname, parsed.start_date, end_date)
+        existing_path.replace(final_path)
+
+    if (
+        cutoff is not None
+        and appended_rows
+        and not saw_cutoff_day
+        and min_new is not None
+        and (min_new - cutoff).days > 1
+    ):
+        sys.stderr.write(
+            f"Warning: gap for {safe_hostname}: local data ends {cutoff.isoformat()}, "
+            f"server's earliest new data is {min_new.isoformat()}; intervening days "
+            "were pruned on the server.\n"
+        )
+
+    return MergeResult(
+        path=final_path,
+        hostname=safe_hostname,
+        start_date=start_date if start_date is not None else end_date,
+        end_date=end_date,
+        existing_rows=len(boundary),
+        downloaded_rows=downloaded_rows,
+        appended_rows=appended_rows,
+        duplicate_rows=duplicate_rows,
+    )
+
+
+def merge_lines_into_host_log(hostname: str, remote_lines: Iterable[str], output_dir: Path) -> MergeResult:
+    safe_hostname = sanitize_hostname(hostname)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    existing_paths = find_existing_host_logs(output_dir, safe_hostname)
+    if len(existing_paths) == 1:
+        return _incremental_append(safe_hostname, remote_lines, output_dir, existing_paths[0])
+    return _full_write(safe_hostname, remote_lines, output_dir, existing_paths)
+
+
+# --- SSH ---------------------------------------------------------------------
+
+
 def build_ssh_base_command_from_options(
     server: str,
     *,
@@ -202,21 +372,33 @@ def read_remote_hostname(ssh_base_command: Sequence[str]) -> str:
     raise RemoteCommandError("Remote hostname command returned no output")
 
 
-def build_remote_cat_command(remote_log_dir: str) -> str:
-    quoted_log_dir = shlex.quote(remote_log_dir)
+def build_remote_cat_command(remote_log_dir: str, since_date: Optional[date] = None) -> str:
+    """Remote sh that cats daily files whose date >= since_date (all if None).
+
+    POSIX-safe: dates are zero-padded YYYY-MM-DD, so `since` sorts <= `d` exactly
+    when since is chronologically on/before d. Uses printf|sort|head (no bashisms).
+    """
+    quoted_dir = shlex.quote(remote_log_dir)
+    quoted_since = shlex.quote(since_date.isoformat() if since_date else "")
     return (
-        f"log_dir={quoted_log_dir}; "
+        f"log_dir={quoted_dir}; since={quoted_since}; "
         'if [ ! -d "$log_dir" ]; then '
-        'echo "Remote log directory does not exist: $log_dir" >&2; exit 2; '
-        "fi; "
-        'find "$log_dir" -maxdepth 1 -type f -name "metrics-*.jsonl" -print | sort | '
-        'while IFS= read -r file; do cat "$file"; done'
+        'echo "Remote log directory does not exist: $log_dir" >&2; exit 2; fi; '
+        'find "$log_dir" -maxdepth 1 -type f -name \'metrics-*.jsonl\' -print | sort | '
+        'while IFS= read -r file; do '
+        'base=${file##*/}; d=${base#metrics-}; d=${d%.jsonl}; '
+        'if [ -z "$since" ] || '
+        '[ "$(printf \'%s\\n%s\\n\' "$since" "$d" | sort | head -n 1)" = "$since" ]; then '
+        'cat "$file"; fi; '
+        "done"
     )
 
 
-def stream_remote_log_lines(ssh_base_command: Sequence[str], remote_log_dir: str) -> Iterable[str]:
+def stream_remote_log_lines(
+    ssh_base_command: Sequence[str], remote_log_dir: str, since_date: Optional[date] = None
+) -> Iterable[str]:
     process = subprocess.Popen(
-        [*ssh_base_command, build_remote_cat_command(remote_log_dir)],
+        [*ssh_base_command, build_remote_cat_command(remote_log_dir, since_date)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -246,15 +428,22 @@ def download_host_logs(
     identity_file: Optional[str] = None,
     ssh_options: Sequence[str] = (),
 ) -> MergeResult:
-    """Download + merge a host's logs. Reusable by the monthly report."""
+    """Download the delta + append to the host's combined file. Reusable by the report."""
     ssh_base_command = build_ssh_base_command_from_options(
         server, port=port, identity_file=identity_file, ssh_options=ssh_options
     )
     resolved_hostname = hostname or read_remote_hostname(ssh_base_command)
+    output_dir = Path(output_dir).expanduser()
+
+    # If there's exactly one existing per-host file, fetch only data on/after its
+    # latest stored date (the cutoff). Otherwise fetch everything.
+    existing = find_existing_host_logs(output_dir, sanitize_hostname(resolved_hostname))
+    since = read_local_cutoff_date(existing[0]) if len(existing) == 1 else None
+
     return merge_lines_into_host_log(
         hostname=resolved_hostname,
-        remote_lines=stream_remote_log_lines(ssh_base_command, remote_log_dir),
-        output_dir=Path(output_dir).expanduser(),
+        remote_lines=stream_remote_log_lines(ssh_base_command, remote_log_dir, since),
+        output_dir=output_dir,
     )
 
 
@@ -304,13 +493,13 @@ def run(args: argparse.Namespace) -> int:
     print(f"Appended rows: {result.appended_rows}")
     print(f"Duplicate rows skipped: {result.duplicate_rows}")
     if result.existing_rows:
-        print(f"Existing rows kept: {result.existing_rows}")
+        print(f"Boundary rows compared: {result.existing_rows}")
     return 0
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Download all system-resource-monitor JSONL logs from a server into local-debug-logs."
+        description="Download new system-resource-monitor logs from a server and append them locally."
     )
     add_arguments(parser)
     return run(parser.parse_args(argv))

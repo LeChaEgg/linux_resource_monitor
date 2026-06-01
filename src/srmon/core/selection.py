@@ -1,7 +1,7 @@
 """Log directory / file selection across server and downloaded ("local") logs.
 
 The --mode default is "auto": it reads /var/log/system-resource-monitor when those
-server logs are present, otherwise the newest combined file in local-debug-logs/.
+server logs are present, otherwise the newest combined file in data/.
 This keeps the on-server summary working (it must find /var/log/...) while a
 workstation with no server logs transparently falls back to the downloaded copies.
 """
@@ -22,7 +22,7 @@ from srmon.core.timerange import date_range_set, ranges_overlap, select_recent_d
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SERVER_LOG_DIR = Path("/var/log/system-resource-monitor")
-DEFAULT_DOWNLOADED_LOG_DIR = REPO_ROOT / "local-debug-logs"
+DEFAULT_DOWNLOADED_LOG_DIR = REPO_ROOT / "data"
 DEFAULT_LOG_DAYS = 30
 
 
@@ -44,8 +44,8 @@ def add_log_selection_args(parser: argparse.ArgumentParser, *, default_days: int
         choices=("auto", "server", "local"),
         default="auto",
         help=(
-            "Log selection mode. auto uses server logs when present, otherwise local-debug-logs. "
-            "server reads /var/log/system-resource-monitor. local reads local-debug-logs."
+            "Log selection mode. auto uses server logs when present, otherwise data. "
+            "server reads /var/log/system-resource-monitor. local reads data."
         ),
     )
     parser.add_argument(
