@@ -131,7 +131,7 @@ day simply show fewer "days with data" — coverage is reported as-is.
 ### Individual steps
 
 When you need to investigate an incident, download the remote logs into the
-repo-local `local-debug-logs/` directory (ignored by git):
+repo-local `data/` directory (ignored by git):
 
 ```bash
 srmon download robotruck@100.64.0.6
@@ -139,14 +139,14 @@ srmon download robotruck@100.64.0.6
 
 The downloader reads all remote `metrics-YYYY-MM-DD.jsonl` files from
 `/var/log/system-resource-monitor`, detects the hostname, and writes a combined
-local file named like `local-debug-logs/server-a_2026-04-20_to_2026-04-30.jsonl`,
+local file named like `data/server-a_2026-04-20_to_2026-04-30.jsonl`,
 merging into any existing file for that host, skipping duplicate rows, and renaming
 when the date range expands. Use `--remote-log-dir`, `--port`, `--identity-file`,
 or repeated `--ssh-option` values for connection details.
 
 The analysis commands default to `--mode auto` and the most recent 30 recorded
 days. Auto reads `/var/log/system-resource-monitor` when present; otherwise the
-newest combined file in `local-debug-logs/`. Use `--mode server` or `--mode local`
+newest combined file in `data/`. Use `--mode server` or `--mode local`
 to force one, and narrow local logs by hostname and date range:
 
 ```bash
@@ -157,7 +157,7 @@ srmon export  --mode local --hostname server-a --start-date 2026-04-20 --end-dat
 srmon plot    --mode local --hostname server-a
 ```
 
-`srmon export` writes `local-debug-logs/resource-monitor_<host>_<start>_to_<end>.csv`
+`srmon export` writes `data/resource-monitor_<host>_<start>_to_<end>.csv`
 by default (`--output FILE` for a custom path, `--output -` for stdout). Point any
 command at a custom directory with `--log-dir /path/to/logs`.
 

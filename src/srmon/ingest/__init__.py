@@ -1,1 +1,1 @@
-"""SSH download and merge of server logs into local-debug-logs/."""
+"""SSH download and merge of server logs into data/."""

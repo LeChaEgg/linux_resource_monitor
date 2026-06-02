@@ -18,7 +18,7 @@ from srmon.report import command as report_command
 
 
 _COMMANDS = [
-    ("download", download, "Download server logs over SSH into local-debug-logs/."),
+    ("download", download, "Download server logs over SSH into data/."),
     ("summary", summary, "Percentile summary of CPU / memory / swap / disk / network / GPU."),
     ("peaks", peaks, "List high-watermark CPU / memory / swap / process-RSS samples."),
     ("plot", timeseries, "Plot CPU / memory / swap over time to a PNG."),

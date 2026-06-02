@@ -24,7 +24,7 @@ class ExportMetricsCsvTests(unittest.TestCase):
     def test_default_export_writes_to_local_debug_logs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             log_dir = Path(tmpdir) / "logs"
-            output_dir = Path(tmpdir) / "local-debug-logs"
+            output_dir = Path(tmpdir) / "data"
             log_dir.mkdir()
             (log_dir / "server-a_2026-04-20_to_2026-04-20.jsonl").write_text(
                 '{"timestamp":"2026-04-20T00:00:00Z","hostname":"server-a","cpu":{"used_pct":10},"memory":{"mem_used_pct":20,"swap_used_pct":0},"disk":{"read_bytes_per_sec":1048576,"write_bytes_per_sec":0},"network":{"rx_bytes_per_sec":0,"tx_bytes_per_sec":0},"top_cpu_threads":[],"top_memory_processes":[]}\n',

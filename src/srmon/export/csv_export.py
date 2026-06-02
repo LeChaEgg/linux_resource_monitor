@@ -121,7 +121,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "Write CSV to this path. Use - to write to stdout. "
-            "Default: local-debug-logs/resource-monitor_<host>_<start>_to_<end>.csv"
+            "Default: data/resource-monitor_<host>_<start>_to_<end>.csv"
         ),
     )
 

@@ -60,7 +60,14 @@ def warn_invalid_sample(path: Path, line_number: int, exc: JSONDecodeError) -> N
 def iter_samples(
     log_files: Iterable[Path],
     on_invalid: Optional[Callable[[Path, int, JSONDecodeError], None]] = None,
+    warn: bool = True,
 ) -> Iterator[Tuple[Path, int, Dict[str, object]]]:
+    """Yield (path, line_number, sample) for each valid JSON sample.
+
+    Invalid lines are skipped; `on_invalid` (if given) is called for each, and a
+    stderr warning is emitted unless `warn=False` — let a caller that walks the
+    same files more than once warn on only one of the passes.
+    """
     selected_dates_by_path = getattr(log_files, "selected_dates_by_path", {})
     hostname_filter = getattr(log_files, "hostname_filter", None)
     for path in log_files:
@@ -75,7 +82,8 @@ def iter_samples(
                 except JSONDecodeError as exc:
                     if on_invalid is not None:
                         on_invalid(path, line_number, exc)
-                    warn_invalid_sample(path, line_number, exc)
+                    if warn:
+                        warn_invalid_sample(path, line_number, exc)
                     continue
                 if not isinstance(sample, dict):
                     continue

@@ -19,11 +19,17 @@ SeriesByHost = Dict[str, List[Tuple[datetime, float]]]
 
 
 def collect_series(log_files: Iterable[Path]) -> Tuple[SeriesByHost, SeriesByHost, SeriesByHost]:
+    return collect_series_from_samples(sample for _, _, sample in iter_samples(log_files))
+
+
+def collect_series_from_samples(
+    samples: Iterable[Dict[str, object]],
+) -> Tuple[SeriesByHost, SeriesByHost, SeriesByHost]:
     cpu_by_host: SeriesByHost = defaultdict(list)
     mem_by_host: SeriesByHost = defaultdict(list)
     swap_by_host: SeriesByHost = defaultdict(list)
 
-    for _, _, sample in iter_samples(log_files):
+    for sample in samples:
         timestamp_raw = sample.get("timestamp")
         if not isinstance(timestamp_raw, str):
             continue
@@ -130,7 +136,16 @@ def render_timeseries_figure(log_files: Iterable[Path], output_path: Path, *, ti
 
     Reusable by the monthly report.
     """
-    cpu_by_host, mem_by_host, swap_by_host = collect_series(log_files)
+    return render_timeseries_from_samples(
+        (sample for _, _, sample in iter_samples(log_files)), output_path, title=title
+    )
+
+
+def render_timeseries_from_samples(
+    samples: Iterable[Dict[str, object]], output_path: Path, *, title: Optional[str] = None
+) -> Optional[Path]:
+    """Render the PNG from already-parsed samples. Returns the path, or None if empty."""
+    cpu_by_host, mem_by_host, swap_by_host = collect_series_from_samples(samples)
     if not (cpu_by_host or mem_by_host or swap_by_host):
         return None
     return render_series(cpu_by_host, mem_by_host, swap_by_host, output_path, title=title)

@@ -96,6 +96,29 @@ def detect_parallelism_bottleneck(cpu_p95: Optional[float], hottest_thread: Opti
 
 
 def build_report(log_files: Iterable[Path], spreadsheet_values_only: bool = False) -> str:
+    """Summarize the given log files. Thin wrapper over build_report_from_samples."""
+    skipped_invalid_samples = 0
+
+    def count_invalid(_path: Path, _line_number: int, _exc: JSONDecodeError) -> None:
+        nonlocal skipped_invalid_samples
+        skipped_invalid_samples += 1
+
+    samples = [sample for _, _, sample in iter_samples(log_files, on_invalid=count_invalid)]
+    return build_report_from_samples(
+        samples, spreadsheet_values_only=spreadsheet_values_only, skipped_invalid_samples=skipped_invalid_samples
+    )
+
+
+def build_report_from_samples(
+    samples: Iterable[Dict[str, object]],
+    spreadsheet_values_only: bool = False,
+    skipped_invalid_samples: int = 0,
+) -> str:
+    """Build the summary text from already-parsed samples.
+
+    Lets the monthly report parse a host's month once and feed the same samples to
+    the summary, peaks, and plot instead of re-reading the file for each.
+    """
     timestamps: List[str] = []
     cpu_used: List[float] = []
     mem_used: List[float] = []
@@ -112,13 +135,8 @@ def build_report(log_files: Iterable[Path], spreadsheet_values_only: bool = Fals
     top_memory_observations: List[Dict[str, object]] = []
     hostnames = set()
     sample_count = 0
-    skipped_invalid_samples = 0
 
-    def count_invalid(_path: Path, _line_number: int, _exc: JSONDecodeError) -> None:
-        nonlocal skipped_invalid_samples
-        skipped_invalid_samples += 1
-
-    for _, _, sample in iter_samples(log_files, on_invalid=count_invalid):
+    for sample in samples:
         sample_count += 1
         timestamp = str(sample.get("timestamp", "unknown"))
         timestamps.append(timestamp)
