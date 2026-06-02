@@ -1,6 +1,7 @@
 """CLI glue for the monthly ``srmon report`` command."""
 
 import argparse
+import sys
 from datetime import date
 from pathlib import Path
 from typing import List, Optional, Sequence
@@ -129,6 +130,10 @@ def run(args: argparse.Namespace) -> int:
     if inventory_path and not args.servers:
         print(f"Inventory: {inventory_path}")
 
+    def progress(message: str) -> None:
+        # Live status goes to stderr so the final report (stdout) stays clean.
+        print(message, file=sys.stderr, flush=True)
+
     outcomes = build_reports(
         specs,
         month=month,
@@ -137,6 +142,7 @@ def run(args: argparse.Namespace) -> int:
         force=args.force,
         peak_limit=args.peak_limit,
         downloaded_log_dir=Path(args.downloaded_log_dir),
+        progress=progress,
     )
 
     print(f"Monthly report — {month}")

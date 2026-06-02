@@ -62,12 +62,20 @@ class PeakResult:
 
 
 def compute_peaks(log_files: Iterable[Path], process_name: Optional[str] = None) -> PeakResult:
+    return compute_peaks_from_samples(
+        (sample for _, _, sample in iter_samples(log_files)), process_name
+    )
+
+
+def compute_peaks_from_samples(
+    samples: Iterable[Dict[str, object]], process_name: Optional[str] = None
+) -> PeakResult:
     cpu_rows: List[Dict[str, object]] = []
     mem_rows: List[Dict[str, object]] = []
     swap_rows: List[Dict[str, object]] = []
     rss_rows: List[Dict[str, object]] = []
 
-    for _, _, sample in iter_samples(log_files):
+    for sample in samples:
         timestamp = str(sample.get("timestamp", "unknown"))
         hostname = str(sample.get("hostname", "unknown"))
         memory = sample.get("memory", {})
@@ -156,7 +164,15 @@ def rss_line(row: Dict[str, object]) -> str:
 
 
 def build_peak_report(log_files: Iterable[Path], limit: int, process_name: Optional[str] = None) -> str:
-    result = compute_peaks(log_files, process_name)
+    return build_peak_report_from_samples(
+        (sample for _, _, sample in iter_samples(log_files)), limit, process_name
+    )
+
+
+def build_peak_report_from_samples(
+    samples: Iterable[Dict[str, object]], limit: int, process_name: Optional[str] = None
+) -> str:
+    result = compute_peaks_from_samples(samples, process_name)
     sections = [
         format_metric_section("Top CPU Samples", [cpu_line(row, process_name) for row in result.cpu_rows[:limit]]),
         format_metric_section("Top Memory Samples", [mem_line(row, process_name) for row in result.mem_rows[:limit]]),

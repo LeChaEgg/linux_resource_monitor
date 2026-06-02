@@ -115,6 +115,44 @@ class ReportBuilderTests(unittest.TestCase):
                 )
             mock_download.assert_not_called()
 
+    def test_download_skipped_when_local_store_covers_month(self) -> None:
+        # Local store already extends to/past month_end, so even with download=True
+        # there is no new in-month data to fetch — SSH must not be touched.
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = Path(tmp) / "logs"
+            reports = Path(tmp) / "reports"
+            seed_log(
+                logs,
+                "H002",
+                CROSS_BOUNDARY_ROWS + [sample("2026-05-31T23:00:00Z", "H002", 70, 65, 2)],
+            )
+
+            with patch.object(builder, "download_host_logs") as mock_download:
+                outcome = builder.build_host_report(
+                    HostSpec(ssh="me@host", name="H002"),
+                    month="2026-05", out_dir=reports, download=True, downloaded_log_dir=logs,
+                )
+            mock_download.assert_not_called()
+            self.assertEqual(outcome.status, "generated")
+
+    def test_download_runs_when_local_store_falls_short_of_month_end(self) -> None:
+        # Local store ends mid-month, so download=True must still fetch the delta.
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = Path(tmp) / "logs"
+            reports = Path(tmp) / "reports"
+            seed_log(logs, "H002", CROSS_BOUNDARY_ROWS)  # ends 2026-05-09
+            fake = MergeResult(
+                path=logs / "H002_2026-04-28_to_2026-05-09.jsonl", hostname="H002",
+                start_date=date(2026, 4, 28), end_date=date(2026, 5, 9),
+                existing_rows=0, downloaded_rows=0, appended_rows=0, duplicate_rows=0,
+            )
+            with patch.object(builder, "download_host_logs", return_value=fake) as mock_download:
+                builder.build_host_report(
+                    HostSpec(ssh="me@host", name="H002"),
+                    month="2026-05", out_dir=reports, download=True, downloaded_log_dir=logs,
+                )
+            mock_download.assert_called_once()
+
     def test_download_path_invokes_download(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             logs = Path(tmp) / "logs"
@@ -132,6 +170,79 @@ class ReportBuilderTests(unittest.TestCase):
                 )
             mock_download.assert_called_once()
             self.assertEqual(outcome.status, "generated")
+
+    def test_report_attempts_backfill_when_month_absent_locally(self) -> None:
+        # Local store has only May/June; an April report must NOT skip the download
+        # (the old end-date-only check wrongly did), it must try to backfill April.
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = Path(tmp) / "logs"
+            reports = Path(tmp) / "reports"
+            seed_log(logs, "H002", [sample("2026-05-07T00:00:00Z", "H002", 10, 20),
+                                    sample("2026-06-01T00:00:00Z", "H002", 11, 21)])
+
+            fake = MergeResult(
+                path=logs / "H002_2026-05-07_to_2026-06-01.jsonl", hostname="H002",
+                start_date=date(2026, 5, 7), end_date=date(2026, 6, 1),
+                existing_rows=0, downloaded_rows=0, appended_rows=0, duplicate_rows=0,
+            )
+            with patch.object(builder, "download_host_logs", return_value=fake) as mock_download:
+                builder.build_host_report(
+                    HostSpec(ssh="me@host", name="H002"),
+                    month="2026-04", out_dir=reports, download=True, downloaded_log_dir=logs,
+                )
+            mock_download.assert_called_once()
+            # The fetch was scoped to the requested (April) window.
+            kwargs = mock_download.call_args.kwargs
+            self.assertEqual(kwargs["want_start"], date(2026, 4, 1))
+            self.assertEqual(kwargs["want_end"], date(2026, 4, 30))
+
+    def test_report_skips_download_only_when_month_present_and_complete(self) -> None:
+        # Local store overlaps May and extends past month-end -> safe to skip SSH.
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = Path(tmp) / "logs"
+            reports = Path(tmp) / "reports"
+            seed_log(logs, "H002", CROSS_BOUNDARY_ROWS + [sample("2026-05-31T00:00:00Z", "H002", 9, 9)])
+            with patch.object(builder, "download_host_logs") as mock_download:
+                builder.build_host_report(
+                    HostSpec(ssh="me@host", name="H002"),
+                    month="2026-05", out_dir=reports, download=True, downloaded_log_dir=logs,
+                )
+            mock_download.assert_not_called()
+
+    def test_report_handles_no_data_after_backfill_miss(self) -> None:
+        # download returns None (remote pruned the month) -> skipped_no_data, no crash.
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = Path(tmp) / "logs"
+            reports = Path(tmp) / "reports"
+            seed_log(logs, "H002", [sample("2026-05-07T00:00:00Z", "H002", 10, 20)])
+            with patch.object(builder, "download_host_logs", return_value=None) as mock_download:
+                outcome = builder.build_host_report(
+                    HostSpec(ssh="me@host", name="H002"),
+                    month="2026-04", out_dir=reports, download=True, downloaded_log_dir=logs,
+                )
+            mock_download.assert_called_once()
+            self.assertEqual(outcome.status, "skipped_no_data")
+            self.assertIn("pruned", outcome.detail)  # message reflects the SSH attempt
+
+    def test_no_data_message_reports_server_earliest_date(self) -> None:
+        # An empty backfill carries the server's earliest date so the message explains why.
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = Path(tmp) / "logs"
+            reports = Path(tmp) / "reports"
+            seed_log(logs, "H002", [sample("2026-05-07T00:00:00Z", "H002", 10, 20)])
+            empty = MergeResult(
+                path=logs / "H002_2026-05-07_to_2026-05-07.jsonl", hostname="H002",
+                start_date=date(2026, 5, 7), end_date=date(2026, 5, 7),
+                existing_rows=0, downloaded_rows=0, appended_rows=0, duplicate_rows=0,
+                remote_earliest_date=date(2026, 5, 7),
+            )
+            with patch.object(builder, "download_host_logs", return_value=empty):
+                outcome = builder.build_host_report(
+                    HostSpec(ssh="me@host", name="H002"),
+                    month="2026-04", out_dir=reports, download=True, downloaded_log_dir=logs,
+                )
+            self.assertEqual(outcome.status, "skipped_no_data")
+            self.assertIn("2026-05-07", outcome.detail)
 
     def test_build_reports_writes_index_for_multiple_hosts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

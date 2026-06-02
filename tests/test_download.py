@@ -7,8 +7,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from unittest.mock import patch  # noqa: E402
+
+from srmon.ingest import download as download_mod  # noqa: E402
 from srmon.ingest.download import (  # noqa: E402
     build_remote_cat_command,
+    download_host_logs,
     merge_lines_into_host_log,
     read_local_cutoff_date,
     repair_partial_tail,
@@ -65,6 +69,115 @@ class DownloadMergeTests(unittest.TestCase):
         self.assertIn("sort | head", cmd)  # the >= since filter
         # No cutoff -> fetch everything (empty since).
         self.assertIn("since=''", build_remote_cat_command("/var/log/x", None))
+
+    def test_remote_command_bounds_with_until_date(self) -> None:
+        cmd = build_remote_cat_command("/var/log/x", date(2026, 4, 1), date(2026, 4, 30))
+        self.assertIn("since=2026-04-01", cmd)
+        self.assertIn("until=2026-04-30", cmd)
+        # Open-ended upper bound stays empty.
+        self.assertIn("until=''", build_remote_cat_command("/var/log/x", date(2026, 4, 1)))
+
+    def test_full_write_sorts_backfilled_rows_before_existing(self) -> None:
+        # Older "backfill" rows must land before the existing newer rows so the file
+        # stays chronological (the forward append relies on the tail being the latest).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            existing = output_dir / "server-a_2026-05-07_to_2026-05-08.jsonl"
+            existing.write_text(line("2026-05-07T00:00:00Z") + line("2026-05-08T00:00:00Z"), encoding="utf-8")
+
+            result = merge_lines_into_host_log(
+                hostname="server-a",
+                remote_lines=[line("2026-04-10T00:00:00Z"), line("2026-04-11T00:00:00Z")],
+                output_dir=output_dir,
+                force_full_merge=True,  # backfill path
+            )
+
+            timestamps = [json.loads(row)["timestamp"] for row in result.path.read_text().splitlines()]
+            self.assertEqual(timestamps, sorted(timestamps))
+            self.assertEqual(timestamps[-1], "2026-05-08T00:00:00Z")  # tail is the latest
+            self.assertEqual(result.path.name, "server-a_2026-04-10_to_2026-05-08.jsonl")
+
+
+class DownloadWindowTests(unittest.TestCase):
+    """download_host_logs scoped to a requested month (the report's path)."""
+
+    def _run(self, output_dir, remote_lines, want_start, want_end, hostname="H1"):
+        captured = {}
+
+        def fake_stream(_ssh, _dir, since=None, until=None):
+            captured["since"], captured["until"] = since, until
+            return list(remote_lines)
+
+        with patch.object(download_mod, "read_remote_hostname", return_value=hostname), patch.object(
+            download_mod, "stream_remote_log_lines", side_effect=fake_stream
+        ):
+            result = download_host_logs(
+                "u@h", output_dir=output_dir, hostname=hostname, want_start=want_start, want_end=want_end
+            )
+        return result, captured
+
+    def test_backfills_older_month_scoped_to_its_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            (out / "H1_2026-05-07_to_2026-06-01.jsonl").write_text(
+                line("2026-05-07T00:00:00Z", "H1") + line("2026-06-01T00:00:00Z", "H1"), encoding="utf-8"
+            )
+            result, captured = self._run(
+                out,
+                [line("2026-04-10T00:00:00Z", "H1"), line("2026-04-11T00:00:00Z", "H1")],
+                date(2026, 4, 1),
+                date(2026, 4, 30),
+            )
+            # Fetch was scoped to April, not "everything since the June tail".
+            self.assertEqual((captured["since"], captured["until"]), (date(2026, 4, 1), date(2026, 4, 30)))
+            self.assertEqual(result.appended_rows, 2)
+            self.assertEqual(result.path.name, "H1_2026-04-10_to_2026-06-01.jsonl")
+
+    def test_backfills_missing_month_between_separate_local_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            (out / "H1_2026-04-01_to_2026-04-01.jsonl").write_text(line("2026-04-01T00:00:00Z", "H1"), encoding="utf-8")
+            (out / "H1_2026-06-01_to_2026-06-01.jsonl").write_text(line("2026-06-01T00:00:00Z", "H1"), encoding="utf-8")
+
+            result, captured = self._run(
+                out,
+                [line("2026-05-10T00:00:00Z", "H1")],
+                date(2026, 5, 1),
+                date(2026, 5, 31),
+            )
+
+            self.assertEqual((captured["since"], captured["until"]), (date(2026, 5, 1), date(2026, 5, 31)))
+            self.assertEqual(result.appended_rows, 1)
+            self.assertEqual(result.path.name, "H1_2026-04-01_to_2026-06-01.jsonl")
+
+    def test_backfill_with_pruned_remote_leaves_store_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            existing = out / "H1_2026-05-07_to_2026-06-01.jsonl"
+            body = line("2026-05-07T00:00:00Z", "H1") + line("2026-06-01T00:00:00Z", "H1")
+            existing.write_text(body, encoding="utf-8")
+
+            result, _ = self._run(out, [], date(2026, 4, 1), date(2026, 4, 30))
+            self.assertEqual(result.downloaded_rows, 0)
+            self.assertEqual(existing.read_text(encoding="utf-8"), body)  # untouched
+
+    def test_backfill_new_host_with_pruned_remote_returns_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result, _ = self._run(Path(tmpdir), [], date(2026, 4, 1), date(2026, 4, 30))
+            self.assertIsNone(result)
+
+    def test_forward_window_fetches_delta_after_local_tail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            (out / "H1_2026-06-01_to_2026-06-01.jsonl").write_text(
+                line("2026-06-01T00:00:00Z", "H1"), encoding="utf-8"
+            )
+            result, captured = self._run(
+                out, [line("2026-06-02T00:00:00Z", "H1")], date(2026, 6, 1), date(2026, 6, 30)
+            )
+            # Local store overlaps June -> forward delta from the tail, no upper bound.
+            self.assertEqual((captured["since"], captured["until"]), (date(2026, 6, 1), None))
+            self.assertEqual(result.appended_rows, 1)
 
     def test_incremental_append_is_in_place_and_bumps_end_date(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
