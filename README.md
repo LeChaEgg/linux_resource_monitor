@@ -6,7 +6,7 @@ the data to find the correct size for a server.
 The project has two parts:
 
 - A collector. It runs on each server.
-- The `srmon` toolkit. It runs on your workstation. It downloads the logs and
+- The `srmon` toolkit. It runs on your local machine. It downloads the logs and
   makes summaries, peak lists, plots, and monthly reports for each host.
 
 ## Two roles
@@ -15,7 +15,7 @@ The project has two parts:
   and GPU data every 10 seconds. It writes the data to
   `/var/log/system-resource-monitor/`. The service uses only the Python
   standard library. You do not need `pip` or third-party packages.
-- **Workstation:** The `srmon` command downloads the logs from the servers.
+- **Local machine:** The `srmon` command downloads the logs from the servers.
   It makes summaries, peak lists, time-series plots, CSV files, and monthly
   reports from the logs.
 
@@ -76,7 +76,7 @@ server:
    system-resource-monitor-summary
    ```
 
-## Install the toolkit on your workstation
+## Install the toolkit on your local machine
 
 You must have Python 3.11 or later.
 
@@ -258,7 +258,7 @@ To also remove the configuration file and the logs, add `--purge`.
 - The collector operates on Ubuntu and other Linux systems with `systemd`.
   The collector and the summary use only `/proc`, `nvidia-smi`, and the
   Python standard library.
-- matplotlib is necessary only on the workstation, and only for `srmon plot`
+- matplotlib is necessary only on the local machine, and only for `srmon plot`
   and `srmon report`. `srmon` loads matplotlib only when it is necessary.
   Thus, `srmon summary` and the server summary do not need matplotlib.
 - For the full operation instructions, refer to
