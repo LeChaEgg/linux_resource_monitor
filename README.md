@@ -1,163 +1,241 @@
 # System Resource Monitor
 
-Lightweight Ubuntu resource monitoring for long-run server sizing, plus a local
-toolkit (`srmon`) for downloading logs and producing summaries, peaks, plots, and
-**one-command monthly per-host reports**.
+This project monitors the resources of Ubuntu servers for a long period. Use
+the data to find the correct size for a server.
+
+The project has two parts:
+
+- A collector. It runs on each server.
+- The `srmon` toolkit. It runs on your workstation. It downloads the logs and
+  makes summaries, peak lists, plots, and monthly reports for each host.
 
 ## Two roles
 
-- **On each server** — a `systemd` service samples CPU, memory, swap, disk,
-  network, and GPU every 10 seconds into `/var/log/system-resource-monitor/`.
-  Standard library only; no `pip`, no third-party packages.
-- **On your workstation** — the `srmon` command downloads those logs and turns
-  them into summaries, peak lists, time-series plots, CSVs, and monthly reports.
+- **Server:** A `systemd` service records CPU, memory, swap, disk, network,
+  and GPU data every 10 seconds. It writes the data to
+  `/var/log/system-resource-monitor/`. The service uses only the Python
+  standard library. You do not need `pip` or third-party packages.
+- **Workstation:** The `srmon` command downloads the logs from the servers.
+  It makes summaries, peak lists, time-series plots, CSV files, and monthly
+  reports from the logs.
 
 ## Repository layout
 
-- `src/srmon/` — the Python package
-  - `collect/` the on-host sampler · `ingest/` SSH download · `core/` shared log
-    selection/parsing/formatting · `analysis/` summary, peaks, window ·
-    `export/` CSV · `plotting/` matplotlib · `report/` the monthly report ·
-    `cli/` the `srmon` entry point
-- `scripts/` — the systemd installer and uninstaller
-  (`install-system-resource-monitor.sh`, `uninstall-system-resource-monitor.sh`)
-- `docs/system-resource-monitor.md` — full operating manual
-- `hosts.example.toml` — copy to `hosts.toml` for the monthly report inventory
+| Path | Contents |
+| --- | --- |
+| `src/srmon/collect/` | The collector that runs on the server |
+| `src/srmon/ingest/` | The SSH download |
+| `src/srmon/core/` | Shared log selection, parse, and format code |
+| `src/srmon/analysis/` | The `summary`, `peaks`, and `window` analysis |
+| `src/srmon/export/` | The CSV export |
+| `src/srmon/plotting/` | The matplotlib plots |
+| `src/srmon/report/` | The monthly report |
+| `src/srmon/cli/` | The `srmon` entry point |
+| `scripts/` | The `systemd` install and uninstall scripts |
+| `docs/system-resource-monitor.md` | The full operation manual |
+| `hosts.example.toml` | An example host inventory for the monthly report |
 
-## Install on a server
+## Install the collector on a server
 
-```bash
-sudo sh scripts/install-system-resource-monitor.sh
-```
+1. Copy the repository to the server.
+2. Run the install script:
 
-This installs the collector to `/usr/local/bin/system-resource-monitor`, the
-`srmon` package to `/usr/local/lib/system-resource-monitor/`, a
-`system-resource-monitor-summary` wrapper, `/etc/default/system-resource-monitor`,
-and the `system-resource-monitor.service` unit, then starts logging. The runtime
-uses only the Python standard library.
+   ```bash
+   sudo sh scripts/install-system-resource-monitor.sh
+   ```
 
-On the server:
+The install script installs these items:
 
-```bash
-systemctl status system-resource-monitor.service --no-pager
-tail -n 5 /var/log/system-resource-monitor/metrics-$(date +%F).jsonl
-system-resource-monitor-summary
-```
+- The collector, at `/usr/local/bin/system-resource-monitor`
+- The `srmon` package, at `/usr/local/lib/system-resource-monitor/`
+- The `system-resource-monitor-summary` wrapper
+- The configuration file, at `/etc/default/system-resource-monitor`
+- The `system-resource-monitor.service` unit
 
-## Set up the workstation toolkit (Python ≥ 3.11)
+The script then starts the service. The service uses only the Python standard
+library.
 
-Recommended — install `srmon` as a global tool so it is on your `PATH` everywhere,
-with no virtualenv to activate (and it tracks your local code via `--editable`):
+To make sure that the service operates correctly, do these steps on the
+server:
 
-```bash
-uv tool install --editable . --with matplotlib
-```
+1. Examine the service status:
 
-`srmon` then lives in `~/.local/bin/srmon`. Upgrade with `uv tool upgrade srmon`,
-remove with `uv tool uninstall srmon`. (Ensure `~/.local/bin` is on your `PATH`.)
+   ```bash
+   systemctl status system-resource-monitor.service --no-pager
+   ```
 
-Alternatives:
+2. Examine the last 5 records in the log of today:
 
-- `pipx install -e ".[report]"` — same idea, isolated global CLI.
-- A virtualenv, **without activating it** — call the binary directly:
-  `python3 -m venv .venv && .venv/bin/pip install -e ".[report]"`, then run
-  `.venv/bin/srmon ...`, or `uv run srmon ...` from the project directory.
+   ```bash
+   tail -n 5 /var/log/system-resource-monitor/metrics-$(date +%F).jsonl
+   ```
 
-## Monthly report — the one command
+3. Show a summary of the data:
 
-Copy `hosts.example.toml` to `hosts.toml` and list your servers. A `hosts.toml`
-in the current directory or the repo root is picked up automatically, so the
-everyday command is just:
+   ```bash
+   system-resource-monitor-summary
+   ```
 
-```bash
-srmon report --month 2026-05      # all hosts in hosts.toml; omit --month for the current month
-```
+## Install the toolkit on your workstation
 
-Point at a different inventory with `--inventory PATH`, or run a single host
-directly without any inventory:
+You must have Python 3.11 or later.
+
+We recommend that you install `srmon` as a global tool with `uv`. Then the
+`srmon` command is on your `PATH`, and you do not need a virtual environment.
+The `--editable` option makes `srmon` use your local code.
+
+1. Install `srmon`:
+
+   ```bash
+   uv tool install --editable . --with matplotlib
+   ```
+
+2. Make sure that `~/.local/bin` is on your `PATH`. The `srmon` command is at
+   `~/.local/bin/srmon`.
+
+To upgrade `srmon`, run `uv tool upgrade srmon`.
+To remove `srmon`, run `uv tool uninstall srmon`.
+
+You can also use one of these methods:
+
+- **pipx:** Run `pipx install -e ".[report]"`. This method also gives an
+  isolated global command.
+- **Virtual environment:** You do not have to activate the virtual
+  environment. Run these commands:
+
+  ```bash
+  python3 -m venv .venv
+  .venv/bin/pip install -e ".[report]"
+  ```
+
+  Then run `.venv/bin/srmon ...`. Or, in the project directory, run
+  `uv run srmon ...`.
+
+## Make the monthly report
+
+1. Copy `hosts.example.toml` to `hosts.toml`.
+2. Add your servers to `hosts.toml`.
+3. Run the report command:
+
+   ```bash
+   srmon report --month 2026-05
+   ```
+
+`srmon` finds `hosts.toml` automatically. It looks first in the current
+directory, then in the repository root. If you do not give `--month`, `srmon`
+uses the current month.
+
+To use a different inventory file, add `--inventory PATH`. To make a report
+for one host without an inventory file, give the host in the command:
 
 ```bash
 srmon report --inventory other-hosts.toml --month 2026-05
 srmon report robotruck@100.64.0.6 --month 2026-05
 ```
 
-For each host this **downloads** the logs, **plots** CPU/memory/swap, computes the
-**peaks**, builds the **summary**, and bundles everything into:
+For each host, the report command does these steps:
+
+1. It downloads the logs.
+2. It plots the CPU, memory, and swap data.
+3. It calculates the peaks.
+4. It makes the summary.
+5. It writes all the files to one directory:
 
 ```text
 reports/<host>/<YYYY-MM>/
-  report.md          # open this: the plot is embedded, with peaks and summary below
+  report.md          # Open this file. It shows the plot, the peaks, and the summary.
   cpu-mem-swap.png
-  summary.txt        # raw summary (grep / pbcopy)
+  summary.txt        # The raw summary, for grep or pbcopy
   peaks.txt
-  spreadsheet.tsv    # one-column values for Excel / Google Sheets
-  manifest.json      # what data the report was built from
+  spreadsheet.tsv    # One column of values for Excel or Google Sheets
+  manifest.json      # The data that the report uses
 ```
 
-Behavior:
+### Report behavior
 
-- Defaults to the **current** month; pass `--month YYYY-MM` for a finished month.
-- **Incremental**: a host with no in-month data is skipped (no empty report), and a
-  host already reported with no new data is skipped. Pass `--force` to regenerate
-  anyway, or `--skip-download` to reuse already-downloaded logs without SSH.
-- **Coverage is factual.** Hosts that don't record every day simply show fewer
-  "days with data" in the report header — that is expected, not an error.
-- With more than one host, a `reports/index-<YYYY-MM>.md` roll-up links them all.
+- **Month:** The default is the current month. To make a report for a
+  completed month, use `--month YYYY-MM`.
+- **Incremental reports:** `srmon` does not make a report for a host in these
+  conditions:
+  - The host has no data for the month.
+  - A report for the host exists, and the host has no new data.
+- **Options:** To make the report again, use `--force`. To use the logs that
+  you downloaded before, and not use SSH, use `--skip-download`.
+- **Coverage:** Some hosts do not record data every day. For these hosts, the
+  report header shows fewer "days with data". This is not an error.
+- **Index:** If you have more than one host, `srmon` also writes
+  `reports/index-<YYYY-MM>.md`. This file has links to all the host reports.
 
 ## Individual commands
 
 ```bash
-srmon download user@host                 # SSH-pull logs into data/
-srmon summary  --hostname H002           # p50/p95/p99/max + spreadsheet values
-srmon peaks    --hostname H002           # top CPU / memory / swap / process-RSS samples
-srmon plot     --hostname H002           # 3-panel CPU/MEM/Swap PNG
-srmon export   --hostname H002           # 18-column CSV
+srmon download user@host                 # Download the logs with SSH into data/
+srmon summary  --hostname H002           # Show p50, p95, p99, max, and spreadsheet values
+srmon peaks    --hostname H002           # Show the top CPU, memory, swap, and process RSS samples
+srmon plot     --hostname H002           # Make a PNG with 3 panels: CPU, memory, and swap
+srmon export   --hostname H002           # Write a CSV file with 18 columns
 srmon window   --hostname H002 --timestamp 2026-05-09T01:45:24Z
 ```
 
-Shared selection flags for the analysis commands: `--mode {auto,server,local}`
-(default `auto`: server logs when present, else `data/`), `--hostname`,
-`--start-date` / `--end-date`, `--days`, `--log-dir`.
+The analysis commands use these selection options:
 
-Spreadsheet paste on macOS:
+| Option | Function |
+| --- | --- |
+| `--mode {auto,server,local}` | Select the log source. The default is `auto`: `srmon` uses the server logs if they exist. If not, it uses `data/`. |
+| `--hostname` | Select the host. |
+| `--start-date`, `--end-date` | Select the date range. |
+| `--days` | Select the number of days. |
+| `--log-dir` | Select the log directory. |
+
+To copy the spreadsheet values to the clipboard on macOS, run this command:
 
 ```bash
 srmon summary --hostname H002 --spreadsheet-values-only | pbcopy
 ```
 
-## What It Monitors
+## Monitored data
 
-Each sample records:
+Each sample records these values:
 
-- aggregate CPU usage and 1m / 5m / 15m load average
-- memory used / available and swap used
-- aggregate disk read / write throughput across monitored block devices
-- aggregate network receive / transmit throughput across non-loopback interfaces
-- top `N` CPU-consuming threads for the sample interval
-- top `N` memory-consuming processes
-- NVIDIA GPU overall utilization and memory usage when `nvidia-smi` is available
-- NVIDIA compute processes by GPU memory usage when available
+- The total CPU usage, and the 1-minute, 5-minute, and 15-minute load average
+- The used memory, the available memory, and the used swap
+- The total disk read and write throughput of all monitored block devices
+- The total network receive and transmit throughput of all interfaces,
+  but not the loopback interface
+- The top `N` threads by CPU usage in the sample interval
+- The top `N` processes by memory usage
+- The NVIDIA GPU usage and GPU memory usage, if `nvidia-smi` is available
+- The NVIDIA compute processes by GPU memory usage, if this data is available
 
-Important interpretation notes:
+Read the data correctly:
 
-- thread CPU is sampled by interval delta, so `top_cpu_threads` reflects what was hottest during that window
-- memory is recorded at process level, not true thread-level memory, because Linux does not expose thread RSS meaningfully
-- disk and network are aggregate host-level throughput, not per-process I/O
+- **Thread CPU:** The collector calculates thread CPU from the difference
+  between two samples. Thus, `top_cpu_threads` shows the threads with the
+  highest CPU usage in that interval.
+- **Memory:** The collector records memory for each process, not for each
+  thread. Linux does not give a useful RSS value for each thread.
+- **Disk and network:** The values are the total throughput of the host. They
+  are not the I/O of each process.
 
-## Data Storage
+## Data storage
 
-Logs are written as newline-delimited JSON under `/var/log/system-resource-monitor`:
+The collector writes the logs as newline-delimited JSON to
+`/var/log/system-resource-monitor`:
 
-- one file per UTC day, named `metrics-YYYY-MM-DD.jsonl`
-- one JSON object per line
-- old daily log files are pruned according to `RETAIN_DAYS`
+- There is one file for each UTC day. The file name is
+  `metrics-YYYY-MM-DD.jsonl`.
+- Each line contains one JSON object.
+- The collector deletes old log files. The `RETAIN_DAYS` setting controls the
+  number of days that it keeps.
 
-Downloaded logs are merged per host into `data/<hostname>_<start>_to_<end>.jsonl`
-(both `data/` and `reports/` are gitignored).
+`srmon` merges the downloaded logs for each host into
+`data/<hostname>_<start>_to_<end>.jsonl`. Git ignores the `data/` and
+`reports/` directories.
 
-## Install Details
+## Installation details
 
-The installer writes this default config to `/etc/default/system-resource-monitor`:
+The install script writes this default configuration to
+`/etc/default/system-resource-monitor`:
 
 ```bash
 INTERVAL_SECONDS=10
@@ -166,17 +244,22 @@ RETAIN_DAYS=30
 LOG_DIR=/var/log/system-resource-monitor
 ```
 
-To remove the service and binaries while keeping logs and config:
+To remove the service and the programs, run the uninstall script. This script
+keeps the logs and the configuration file:
 
 ```bash
 sudo sh scripts/uninstall-system-resource-monitor.sh
 ```
 
-Add `--purge` to also remove the config and logs.
+To also remove the configuration file and the logs, add `--purge`.
 
 ## Notes
 
-- Designed for Ubuntu/Linux with `systemd`. The collector and the summary path use only `/proc`, `nvidia-smi`, and the Python standard library.
-- matplotlib is required **only** on the workstation, and **only** for `srmon plot` and `srmon report`; it is imported lazily, so `srmon summary` and the on-server summary never need it.
-- Full operating notes are in `docs/system-resource-monitor.md`.
-```
+- The collector operates on Ubuntu and other Linux systems with `systemd`.
+  The collector and the summary use only `/proc`, `nvidia-smi`, and the
+  Python standard library.
+- matplotlib is necessary only on the workstation, and only for `srmon plot`
+  and `srmon report`. `srmon` loads matplotlib only when it is necessary.
+  Thus, `srmon summary` and the server summary do not need matplotlib.
+- For the full operation instructions, refer to
+  `docs/system-resource-monitor.md`.
